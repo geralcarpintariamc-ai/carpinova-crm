@@ -3,8 +3,8 @@ import { supabase } from "./supabaseClient";
 import {
   Plus, Search, X, Mail, Phone, Calendar, AlertTriangle, TrendingUp,
   Package, CheckCircle2, XCircle, Clock, Download, Building2, ChevronDown,
-  ChevronRight, MapPin, Euro, FileText, Users, LayoutGrid, Table as TableIcon,
-  Wallet, Wrench, ArrowRight, Trash2, Save, RotateCcw
+  ChevronRight, ChevronUp, MapPin, Euro, FileText, Users, LayoutGrid, Table as TableIcon,
+  Wallet, Wrench, ArrowRight, Trash2, Save, RotateCcw, Globe
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -67,9 +67,10 @@ const COTACAO_ESTADOS = [
 const cotacaoEstadoOf = (key) => COTACAO_ESTADOS.find((c) => c.key === key) || COTACAO_ESTADOS[0];
 
 /* ============================================================
-   FORNECEDORES (referência estática — Secção 5 do perfil)
+   FORNECEDORES — dados de partida (Secção 5 do perfil), agrupados
+   por fornecedor num diretório de contactos (ver buildDirectorioFornecedores)
    ============================================================ */
-const FORNECEDORES = [
+const FORNECEDORES_ITENS = [
   { categoria: "Painéis / Melaminas", nome: "Balbino & Faustino (Finsa)", ref: "AGL STD EZ 18mm", preco: "5,09 €/m²", contacto: "Desc. FI-01: 25%" },
   { categoria: "Painéis / Melaminas", nome: "B&F (Finsa)", ref: "MDF STD EZ 18mm", preco: "7,50 €/m²", contacto: "" },
   { categoria: "Painéis / Melaminas", nome: "B&F (Finsa)", ref: "MDF HID EZ 18mm", preco: "9,57 €/m²", contacto: "" },
@@ -99,6 +100,44 @@ const FORNECEDORES = [
   { categoria: "Fenólico Compacto", nome: "Covema", ref: "BLOMA 12mm", preco: "53,02 €/m²", contacto: "" },
   { categoria: "Vidros", nome: "Vidraria Luís Morais / Ilda", ref: "Vidro temperado (biombos)", preco: "—", contacto: "" },
 ];
+
+const slugify = (s) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  .replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+
+/* Agrupa os itens por fornecedor num diretório de contactos:
+   nome, categorias (o que fornece), pessoa de contacto, e a lista de
+   materiais/preços fica guardada mas só aparece se se pedir ("ver preços"). */
+function buildDirectorioFornecedores(itens) {
+  const map = {};
+  itens.forEach((it) => {
+    if (!map[it.nome]) {
+      map[it.nome] = {
+        id: `f_${slugify(it.nome)}`,
+        nome: it.nome,
+        categorias: [],
+        pessoaContacto: "",
+        telefone: "",
+        email: "",
+        site: "",
+        notas: "",
+        materiais: [],
+      };
+    }
+    const f = map[it.nome];
+    if (!f.categorias.includes(it.categoria)) f.categorias.push(it.categoria);
+    if (it.ref) f.materiais.push({ ref: it.ref, preco: it.preco });
+    if (it.contacto) {
+      if (!f.pessoaContacto && !/desc\.|verificar|ref\./i.test(it.contacto)) {
+        f.pessoaContacto = it.contacto;
+      } else {
+        f.notas = f.notas ? `${f.notas} · ${it.contacto}` : it.contacto;
+      }
+    }
+  });
+  return Object.values(map);
+}
+
+const SEED_FORNECEDORES = buildDirectorioFornecedores(FORNECEDORES_ITENS);
 
 /* ============================================================
    DADOS SEMEADOS a partir de Orçamentos_2026.xlsx
@@ -356,6 +395,89 @@ function useObrasStore() {
 }
 
 /* ============================================================
+   FORNECEDORES STORE — mesmo padrão do useObrasStore, mais simples
+   (sem histórico/estados, só ficha de contacto por fornecedor)
+   ============================================================ */
+function useFornecedoresStore() {
+  const [fornecedores, setFornecedores] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const fRef = useRef([]);
+  fRef.current = fornecedores;
+
+  useEffect(() => {
+    let channel;
+    let cancelled = false;
+
+    (async () => {
+      const { data, error } = await supabase.from("fornecedores").select("id, payload").order("updated_at", { ascending: true });
+      if (cancelled) return;
+
+      if (error) {
+        console.error("Erro a carregar fornecedores:", error);
+        setLoading(false);
+        return;
+      }
+
+      if (data && data.length > 0) {
+        setFornecedores(data.map((r) => ({ ...r.payload, id: r.id })));
+      } else {
+        const seedRows = SEED_FORNECEDORES.map((f) => ({ id: f.id, payload: f }));
+        const { error: seedError } = await supabase.from("fornecedores").upsert(seedRows, { onConflict: "id", ignoreDuplicates: true });
+        if (seedError) console.error("Erro a semear fornecedores:", seedError);
+        setFornecedores(SEED_FORNECEDORES);
+      }
+      setLoading(false);
+
+      channel = supabase
+        .channel("fornecedores-realtime")
+        .on("postgres_changes", { event: "*", schema: "public", table: "fornecedores" }, (msg) => {
+          setFornecedores((cur) => {
+            if (msg.eventType === "DELETE") return cur.filter((f) => f.id !== msg.old.id);
+            const incoming = { ...msg.new.payload, id: msg.new.id };
+            const existe = cur.some((f) => f.id === incoming.id);
+            return existe ? cur.map((f) => (f.id === incoming.id ? incoming : f)) : [...cur, incoming];
+          });
+        })
+        .subscribe();
+    })();
+
+    return () => { cancelled = true; if (channel) supabase.removeChannel(channel); };
+  }, []);
+
+  const persistRow = useCallback(async (id, payload) => {
+    const { error } = await supabase.from("fornecedores").upsert({ id, payload, updated_at: new Date().toISOString() }, { onConflict: "id" });
+    if (error) console.error("Erro a gravar fornecedor:", error);
+  }, []);
+
+  const addFornecedor = useCallback((partial) => {
+    const novo = {
+      id: `f_${slugify(partial.nome || "novo")}_${Date.now().toString(36)}`,
+      nome: "", categorias: [], pessoaContacto: "", telefone: "", email: "", site: "", notas: "", materiais: [],
+      ...partial,
+    };
+    setFornecedores((cur) => [...cur, novo]);
+    persistRow(novo.id, novo);
+    return novo.id;
+  }, [persistRow]);
+
+  const updateFornecedor = useCallback((id, patch) => {
+    const next = fRef.current.map((f) => (f.id === id ? { ...f, ...patch } : f));
+    setFornecedores(next);
+    const atualizado = next.find((f) => f.id === id);
+    if (atualizado) persistRow(id, atualizado);
+  }, [persistRow]);
+
+  const deleteFornecedor = useCallback((id) => {
+    setFornecedores((cur) => cur.filter((f) => f.id !== id));
+    supabase.from("fornecedores").delete().eq("id", id).then(({ error }) => {
+      if (error) console.error("Erro a eliminar fornecedor:", error);
+    });
+  }, []);
+
+  return { fornecedores, loading, addFornecedor, updateFornecedor, deleteFornecedor };
+}
+
+/* ============================================================
    PEQUENOS COMPONENTES
    ============================================================ */
 function Tag({ children, color }) {
@@ -448,7 +570,7 @@ function Btn({ children, onClick, variant = "primary", icon: Icon, small, type =
 /* ============================================================
    MODAL — DETALHE DA OBRA
    ============================================================ */
-function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, onDelete }) {
+function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, onDelete, fornecedorNomes }) {
   const [local, setLocal] = useState(obra);
   const [novaNota, setNovaNota] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -464,7 +586,7 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
     onChangeEstado(obra.id, novoEstado);
   };
 
-  const fornecedorNomes = useMemo(() => [...new Set(FORNECEDORES.map((f) => f.nome))], []);
+  const fornecedorNomesList = fornecedorNomes || [];
 
   const addCotacao = () => {
     if (!novaCotacao.fornecedor.trim()) return;
@@ -685,7 +807,7 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
               <Btn small icon={Plus} onClick={addCotacao}>Pedir</Btn>
             </div>
             <datalist id="fornecedores-datalist">
-              {fornecedorNomes.map((n) => <option key={n} value={n} />)}
+              {fornecedorNomesList.map((n) => <option key={n} value={n} />)}
             </datalist>
           </div>
 
@@ -1207,43 +1329,201 @@ function Clientes({ obras, onFilterClient }) {
 }
 
 /* ============================================================
-   FORNECEDORES
+   MODAL — FICHA DE FORNECEDOR
    ============================================================ */
-function Fornecedores() {
+function FornecedorModal({ fornecedor, onClose, onUpdate, onDelete }) {
+  const [local, setLocal] = useState(fornecedor);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [categoriasTexto, setCategoriasTexto] = useState((fornecedor.categorias || []).join(", "));
+  const [novoMaterial, setNovoMaterial] = useState({ ref: "", preco: "" });
+
+  useEffect(() => { setLocal(fornecedor); setCategoriasTexto((fornecedor.categorias || []).join(", ")); }, [fornecedor]);
+
+  const set = (patch) => setLocal((l) => ({ ...l, ...patch }));
+  const commit = (patch) => { set(patch); onUpdate(fornecedor.id, patch); };
+
+  const commitCategorias = () => {
+    const categorias = categoriasTexto.split(",").map((c) => c.trim()).filter(Boolean);
+    commit({ categorias });
+  };
+
+  const addMaterial = () => {
+    if (!novoMaterial.ref.trim()) return;
+    const materiais = [...(local.materiais || []), { ...novoMaterial }];
+    commit({ materiais });
+    setNovoMaterial({ ref: "", preco: "" });
+  };
+  const removeMaterial = (idx) => {
+    const materiais = local.materiais.filter((_, i) => i !== idx);
+    commit({ materiais });
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(36,31,26,0.55)", zIndex: 100,
+      display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "4vh 16px", overflowY: "auto",
+    }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: T.paper, borderRadius: 8, width: "100%", maxWidth: 560,
+        border: `1px solid ${T.line}`, boxShadow: "0 20px 50px rgba(0,0,0,0.3)",
+      }}>
+        <div style={{ padding: "18px 24px", borderBottom: `2px dashed ${T.line}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div style={{ fontFamily: "'Roboto Slab', serif", fontSize: 20, fontWeight: 700, color: T.ink }}>
+            {local.nome || "Novo fornecedor"}
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: T.ink, opacity: 0.6 }}><X size={20} /></button>
+        </div>
+
+        <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
+          <Field label="Nome do fornecedor">
+            <input style={inputStyle} value={local.nome} onChange={(e) => set({ nome: e.target.value })} onBlur={() => commit({ nome: local.nome })} />
+          </Field>
+          <Field label="O que fornece (categorias, separadas por vírgula)">
+            <input style={inputStyle} placeholder="ex: Madeiras, Ferragens, Vidros…" value={categoriasTexto} onChange={(e) => setCategoriasTexto(e.target.value)} onBlur={commitCategorias} />
+          </Field>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Field label="Pessoa de contacto">
+              <input style={inputStyle} value={local.pessoaContacto || ""} onChange={(e) => set({ pessoaContacto: e.target.value })} onBlur={() => commit({ pessoaContacto: local.pessoaContacto })} />
+            </Field>
+            <Field label="Telefone">
+              <input style={inputStyle} value={local.telefone || ""} onChange={(e) => set({ telefone: e.target.value })} onBlur={() => commit({ telefone: local.telefone })} />
+            </Field>
+            <Field label="Email">
+              <input type="email" style={inputStyle} value={local.email || ""} onChange={(e) => set({ email: e.target.value })} onBlur={() => commit({ email: local.email })} />
+            </Field>
+            <Field label="Site / link">
+              <input style={inputStyle} placeholder="https://…" value={local.site || ""} onChange={(e) => set({ site: e.target.value })} onBlur={() => commit({ site: local.site })} />
+            </Field>
+          </div>
+
+          <Field label="Notas (descontos, condições, morada…)">
+            <textarea style={textareaStyle} rows={2} value={local.notas || ""} onChange={(e) => set({ notas: e.target.value })} onBlur={() => commit({ notas: local.notas })} />
+          </Field>
+
+          <CutDivider label="Referências de preço (opcional)" />
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {(local.materiais || []).length === 0 && <div style={{ fontSize: 12, opacity: 0.55 }}>Sem referências de preço registadas.</div>}
+            {(local.materiais || []).map((m, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13 }}>
+                <span style={{ flex: 1 }}>{m.ref}</span>
+                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: T.walnutDark }}>{m.preco}</span>
+                <button onClick={() => removeMaterial(i)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={13} /></button>
+              </div>
+            ))}
+            <div style={{ display: "flex", gap: 8 }}>
+              <input style={{ ...inputStyle, flex: 1 }} placeholder="Material / referência" value={novoMaterial.ref} onChange={(e) => setNovoMaterial((s) => ({ ...s, ref: e.target.value }))} />
+              <input style={{ ...inputStyle, width: 120 }} placeholder="Preço" value={novoMaterial.preco} onChange={(e) => setNovoMaterial((s) => ({ ...s, preco: e.target.value }))} />
+              <Btn small icon={Plus} onClick={addMaterial}>Adicionar</Btn>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 10, borderTop: `1px solid ${T.line}` }}>
+            {confirmDelete ? (
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 12, color: T.rust }}>Eliminar este fornecedor?</span>
+                <Btn small variant="danger" onClick={() => { onDelete(fornecedor.id); onClose(); }}>Sim, eliminar</Btn>
+                <Btn small variant="ghost" onClick={() => setConfirmDelete(false)}>Cancelar</Btn>
+              </div>
+            ) : (
+              <Btn small variant="danger" icon={Trash2} onClick={() => setConfirmDelete(true)}>Eliminar</Btn>
+            )}
+            <Btn onClick={onClose}>Fechar</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   FORNECEDORES — diretório de contactos (não lista de preços)
+   ============================================================ */
+function Fornecedores({ fornecedores, onAdd, onUpdate, onDelete }) {
   const [q, setQ] = useState("");
-  const categorias = useMemo(() => {
-    const groups = {};
-    FORNECEDORES.filter((f) => !q || `${f.nome} ${f.ref} ${f.categoria}`.toLowerCase().includes(q.toLowerCase()))
-      .forEach((f) => { (groups[f.categoria] = groups[f.categoria] || []).push(f); });
-    return groups;
-  }, [q]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
+
+  const filtrados = useMemo(() => {
+    if (!q) return fornecedores;
+    const term = q.toLowerCase();
+    return fornecedores.filter((f) =>
+      `${f.nome} ${(f.categorias || []).join(" ")} ${f.pessoaContacto || ""}`.toLowerCase().includes(term)
+    );
+  }, [fornecedores, q]);
+
+  const selected = fornecedores.find((f) => f.id === selectedId);
+
+  const criarNovo = () => {
+    const id = onAdd({ nome: "Novo fornecedor" });
+    setSelectedId(id);
+  };
 
   return (
     <div>
-      <div style={{ position: "relative", marginBottom: 16, maxWidth: 320 }}>
-        <Search size={14} style={{ position: "absolute", left: 9, top: 9, opacity: 0.5 }} />
-        <input style={{ ...inputStyle, width: "100%", paddingLeft: 28 }} placeholder="Pesquisar fornecedor ou material…" value={q} onChange={(e) => setQ(e.target.value)} />
-      </div>
-      {Object.entries(categorias).map(([cat, items]) => (
-        <div key={cat} style={{ marginBottom: 20 }}>
-          <CutDivider label={cat} />
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <tbody>
-                {items.map((f, i) => (
-                  <tr key={i} style={{ borderTop: `1px solid ${T.line}`, background: i % 2 ? "#fff" : T.paper }}>
-                    <td style={{ padding: "8px 12px", fontWeight: 600, width: "26%" }}>{f.nome}</td>
-                    <td style={{ padding: "8px 12px", opacity: 0.8 }}>{f.ref}</td>
-                    <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: T.walnutDark, whiteSpace: "nowrap" }}>{f.preco}</td>
-                    <td style={{ padding: "8px 12px", opacity: 0.6, fontSize: 12 }}>{f.contacto}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ position: "relative", flex: "1 1 260px" }}>
+          <Search size={14} style={{ position: "absolute", left: 9, top: 9, opacity: 0.5 }} />
+          <input style={{ ...inputStyle, width: "100%", paddingLeft: 28 }} placeholder="Pesquisar fornecedor, categoria ou contacto…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
-      ))}
-      {Object.keys(categorias).length === 0 && <div style={{ opacity: 0.5, fontSize: 13 }}>Sem resultados.</div>}
+        <Btn small icon={Plus} onClick={criarNovo}>Novo fornecedor</Btn>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
+        {filtrados.map((f) => {
+          const temPrecos = (f.materiais || []).length > 0;
+          const expanded = expandedId === f.id;
+          return (
+            <div key={f.id} style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6, padding: "14px 16px" }}>
+              <div onClick={() => setSelectedId(f.id)} style={{ cursor: "pointer" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <Building2 size={15} color={T.walnut} />
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>{f.nome || "(sem nome)"}</span>
+                </div>
+                {(f.categorias || []).length > 0 && (
+                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 8 }}>
+                    {f.categorias.map((c) => <Tag key={c} color={T.navy}>{c}</Tag>)}
+                  </div>
+                )}
+                <div style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 12.5, opacity: 0.85 }}>
+                  {f.pessoaContacto && <div>{f.pessoaContacto}</div>}
+                  {f.telefone && <div style={{ display: "flex", alignItems: "center", gap: 6 }}><Phone size={12} /> {f.telefone}</div>}
+                  {f.email && <div style={{ display: "flex", alignItems: "center", gap: 6 }}><Mail size={12} /> {f.email}</div>}
+                  {f.site && <div style={{ display: "flex", alignItems: "center", gap: 6 }}><Globe size={12} /> {f.site.replace(/^https?:\/\//, "")}</div>}
+                  {!f.pessoaContacto && !f.telefone && !f.email && !f.site && (
+                    <div style={{ opacity: 0.5, fontStyle: "italic" }}>Sem contacto registado — clica para preencher</div>
+                  )}
+                </div>
+                {f.notas && <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 6 }}>{f.notas}</div>}
+              </div>
+              {temPrecos && (
+                <div style={{ marginTop: 10, borderTop: `1px dashed ${T.line}`, paddingTop: 8 }}>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setExpandedId(expanded ? null : f.id); }}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: T.walnutDark, fontSize: 11.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 4, padding: 0 }}
+                  >
+                    {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                    {expanded ? "Ocultar" : "Ver"} referências de preço ({f.materiais.length})
+                  </button>
+                  {expanded && (
+                    <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+                      {f.materiais.map((m, i) => (
+                        <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                          <span style={{ opacity: 0.75 }}>{m.ref}</span>
+                          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: T.walnutDark }}>{m.preco}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {filtrados.length === 0 && <div style={{ opacity: 0.5, fontSize: 13 }}>Sem resultados.</div>}
+
+      {selected && <FornecedorModal fornecedor={selected} onClose={() => setSelectedId(null)} onUpdate={onUpdate} onDelete={onDelete} />}
     </div>
   );
 }
@@ -1262,6 +1542,7 @@ const TABS = [
 
 export default function App() {
   const { obras, loading, saveState, addObra, updateObra, changeEstado, addHistorico, deleteObra } = useObrasStore();
+  const { fornecedores, addFornecedor, updateFornecedor, deleteFornecedor } = useFornecedoresStore();
   const [tab, setTab] = useState("painel");
   const [selectedId, setSelectedId] = useState(null);
   const [novaObraOpen, setNovaObraOpen] = useState(false);
@@ -1334,11 +1615,11 @@ export default function App() {
         {tab === "obras" && <ObrasTab obras={obras} onOpen={setSelectedId} onNew={() => setNovaObraOpen(true)} />}
         {tab === "financeiro" && <Financeiro obras={obras} />}
         {tab === "clientes" && <Clientes obras={obras} onFilterClient={() => setTab("obras")} />}
-        {tab === "fornecedores" && <Fornecedores />}
+        {tab === "fornecedores" && <Fornecedores fornecedores={fornecedores} onAdd={addFornecedor} onUpdate={updateFornecedor} onDelete={deleteFornecedor} />}
       </div>
 
       {selected && (
-        <ObraModal obra={selected} onClose={() => setSelectedId(null)} onUpdate={updateObra} onChangeEstado={changeEstado} onAddHistorico={addHistorico} onDelete={deleteObra} />
+        <ObraModal obra={selected} onClose={() => setSelectedId(null)} onUpdate={updateObra} onChangeEstado={changeEstado} onAddHistorico={addHistorico} onDelete={deleteObra} fornecedorNomes={fornecedores.map((f) => f.nome)} />
       )}
       {novaObraOpen && (
         <NovaObraModal suggestedRef={nextRef(obras)} onClose={() => setNovaObraOpen(false)} onCreate={addObra} />
