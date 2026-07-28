@@ -309,7 +309,23 @@ function useObrasStore() {
       }
 
       if (data && data.length > 0) {
-        setObras(data.map((r) => ({ ...r.payload, id: r.id })));
+        const carregadas = data.map((r) => ({ ...r.payload, id: r.id }));
+        // Migração: a fase única "rejeitado" foi dividida em "rejeitado_nos"
+        // e "rejeitado_cliente". Obras antigas com o valor antigo ficavam
+        // invisíveis no Pipeline (nenhuma coluna correspondia). Trazemo-las
+        // de volta para "Rejeitado pelo Cliente" — o utilizador reorganiza
+        // à mão as que afinal foram recusadas por nós.
+        const corrigidas = carregadas.map((o) => (
+          o.estado === "rejeitado" ? { ...o, estado: "rejeitado_cliente" } : o
+        ));
+        corrigidas.forEach((o, i) => {
+          if (o.estado !== carregadas[i].estado) {
+            supabase.from("obras")
+              .upsert({ id: o.id, payload: o, updated_at: new Date().toISOString() }, { onConflict: "id" })
+              .then(({ error }) => { if (error) console.error("Erro a migrar obra:", error); });
+          }
+        });
+        setObras(corrigidas);
       } else {
         // Base de dados vazia — semear com o histórico do Excel.
         // IDs determinísticos + upsert: se os dois computadores arrancarem
