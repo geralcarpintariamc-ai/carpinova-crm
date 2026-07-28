@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
-  PieChart, Pie, Cell, Legend
+  PieChart, Pie, Cell, Legend, ComposedChart, Line
 } from "recharts";
 
 /* ============================================================
@@ -261,6 +261,14 @@ const monthLabel = (isoMonth) => {
   const [y, m] = isoMonth.split("-");
   const names = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
   return names[parseInt(m, 10) - 1] + "/" + y.slice(2);
+};
+// Soma (ou subtrai) meses a uma chave "YYYY-MM", com transporte de ano correto.
+const addMonths = (mesKey, delta) => {
+  let [y, m] = mesKey.split("-").map(Number);
+  m += delta;
+  while (m < 1) { m += 12; y -= 1; }
+  while (m > 12) { m -= 12; y += 1; }
+  return `${y}-${String(m).padStart(2, "0")}`;
 };
 const nextRef = (obras) => {
   const year = new Date().getFullYear();
@@ -710,7 +718,22 @@ function CutDivider({ label }) {
   );
 }
 
-function KpiCard({ icon: Icon, label, value, sub, accent }) {
+function DeltaBadge({ atual, anterior, invertido }) {
+  if (anterior === null || anterior === undefined || anterior === 0) return null;
+  const delta = ((atual - anterior) / Math.abs(anterior)) * 100;
+  if (!isFinite(delta)) return null;
+  const positivo = invertido ? delta < 0 : delta > 0;
+  const neutro = Math.abs(delta) < 1;
+  const cor = neutro ? T.ink : (positivo ? T.green : T.rust);
+  const seta = delta > 0 ? "▲" : delta < 0 ? "▼" : "—";
+  return (
+    <span style={{ fontSize: 11.5, fontWeight: 700, color: cor, opacity: neutro ? 0.5 : 1 }}>
+      {seta} {Math.abs(delta).toFixed(0)}% vs. período anterior
+    </span>
+  );
+}
+
+function KpiCard({ icon: Icon, label, value, sub, accent, delta }) {
   return (
     <div style={{
       background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6,
@@ -723,6 +746,7 @@ function KpiCard({ icon: Icon, label, value, sub, accent }) {
       </div>
       <div style={{ fontFamily: "'Roboto Slab', serif", fontSize: 26, fontWeight: 700, color: T.walnutDark, position: "relative" }}>{value}</div>
       {sub && <div style={{ fontSize: 12, color: T.ink, opacity: 0.6, marginTop: 4, position: "relative" }}>{sub}</div>}
+      {delta && <div style={{ marginTop: 4, position: "relative" }}>{delta}</div>}
     </div>
   );
 }
@@ -1726,6 +1750,84 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
     return { valorAno: valorPeriodo, pipeline, rejeitadoValor, recusadoPorNosValor, pendente, recebido, totalCustosObrasAno, totalDespesasGeraisAno, custosTotaisAno, lucroLiquido, margemLiquidaPct };
   }, [obras, dadosMensais, mesesSelecionadosSet]);
 
+  // Mesmo número de meses, imediatamente antes do período escolhido —
+  // para comparar "este mês/trimestre/ano" com o anterior equivalente.
+  const mesesAnteriores = useMemo(() => {
+    const n = mesesSelecionados.length;
+    return Array.from({ length: n }, (_, i) => addMonths(mesesSelecionados[0], -n + i));
+  }, [mesesSelecionados]);
+
+  const totaisAnteriores = useMemo(() => {
+    const despesasObra = despesas.filter((d) => d.obraId);
+    let receita = 0, despesaGeral = 0, despesaObra = 0;
+    mesesAnteriores.forEach((mesKey) => {
+      receita += obras.filter((o) => WON_KEYS.includes(o.estado)).reduce((s, o) => {
+        const d = o.dataAdjudicacao || o.dataInicioObra || o.dataEntrada;
+        return d && d.slice(0, 7) === mesKey ? s + (Number(o.valorAdjudicado) || 0) : s;
+      }, 0);
+      despesaGeral += despesasGerais.reduce((s, d) => s + despesaValorNoMes(d, mesKey), 0);
+      despesaObra += despesasObra.reduce((s, d) => s + despesaValorNoMes(d, mesKey), 0);
+    });
+    const despesaTotal = despesaGeral + despesaObra;
+    const lucro = receita - despesaTotal;
+    return { receita, despesaTotal, lucro, margemPct: receita > 0 ? (lucro / receita) * 100 : null };
+  }, [obras, despesas, despesasGerais, mesesAnteriores]);
+
+  // Concentração de clientes: quanto da receita do período vem de cada
+  // cliente. Se um só cliente domina, é um risco a vigiar.
+  const concentracaoClientes = useMemo(() => {
+    const map = {};
+    obras.filter((o) => WON_KEYS.includes(o.estado)).forEach((o) => {
+      const d = o.dataAdjudicacao || o.dataInicioObra || o.dataEntrada;
+      if (!d || !mesesSelecionadosSet.has(d.slice(0, 7))) return;
+      map[o.cliente] = (map[o.cliente] || 0) + (Number(o.valorAdjudicado) || 0);
+    });
+    const total = Object.values(map).reduce((s, v) => s + v, 0);
+    const lista = Object.entries(map)
+      .map(([cliente, valor]) => ({ cliente, valor, pct: total > 0 ? (valor / total) * 100 : 0 }))
+      .sort((a, b) => b.valor - a.valor);
+    return { lista, total };
+  }, [obras, mesesSelecionadosSet]);
+
+  // Prazo médio de recebimento: dias entre a adjudicação e cada pagamento
+  // efetivamente marcado como pago — histórico completo, não só o período
+  // escolhido, para não dar valores instáveis com poucos dados.
+  const prazoMedioRecebimento = useMemo(() => {
+    const dias = [];
+    obras.forEach((o) => {
+      const inicio = o.dataAdjudicacao || o.dataEntrada;
+      if (!inicio) return;
+      (o.pagamentos || []).forEach((p) => {
+        if (p.pago && p.data) {
+          const diff = Math.round((new Date(p.data + "T00:00:00") - new Date(inicio + "T00:00:00")) / 86400000);
+          if (!isNaN(diff) && diff >= 0) dias.push(diff);
+        }
+      });
+    });
+    if (!dias.length) return null;
+    return Math.round(dias.reduce((s, d) => s + d, 0) / dias.length);
+  }, [obras]);
+
+  // Previsão de tesouraria: sempre os próximos 6 meses a partir de hoje,
+  // independente do período escolhido acima (é sobre o que vem a seguir).
+  const previsaoTesouraria = useMemo(() => {
+    const hoje = new Date();
+    const mesesFuturos = Array.from({ length: 6 }, (_, i) => {
+      const d = new Date(hoje.getFullYear(), hoje.getMonth() + i, 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    });
+    let acumulado = 0;
+    return mesesFuturos.map((mk) => {
+      let entradas = 0;
+      obras.forEach((o) => (o.pagamentos || []).forEach((p) => {
+        if (!p.pago && p.data && p.data.slice(0, 7) === mk) entradas += Number(p.valor) || 0;
+      }));
+      const saidas = despesasGerais.reduce((s, d) => s + despesaValorNoMes(d, mk), 0);
+      acumulado += entradas - saidas;
+      return { mes: monthLabel(mk), entradas, saidas, saldo: entradas - saidas, acumulado };
+    });
+  }, [obras, despesasGerais]);
+
   const pagamentosPendentes = useMemo(() => {
     const list = [];
     obras.filter((o) => WON_KEYS.includes(o.estado)).forEach((o) => {
@@ -1735,6 +1837,33 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
     });
     return list;
   }, [obras]);
+
+  // Alertas automáticos — sinais simples de saúde financeira, calculados
+  // a partir de tudo o resto.
+  const alertas = useMemo(() => {
+    const list = [];
+    if (totais.lucroLiquido < 0) {
+      list.push({ tipo: "rust", texto: `Lucro líquido negativo em ${periodoLabel} (${fmtEUR(totais.lucroLiquido)}).` });
+    }
+    if (custosFixosMensais > 0 && totais.valorAno > 0) {
+      const receitaMediaMensal = totais.valorAno / mesesSelecionados.length;
+      if (custosFixosMensais > receitaMediaMensal) {
+        list.push({ tipo: "rust", texto: `Os custos fixos mensais (${fmtEUR(custosFixosMensais)}) já ultrapassam a receita média mensal de ${periodoLabel} (${fmtEUR(receitaMediaMensal)}).` });
+      }
+    }
+    if (concentracaoClientes.lista[0] && concentracaoClientes.lista[0].pct >= 40) {
+      list.push({ tipo: "amber", texto: `${concentracaoClientes.lista[0].cliente} representa ${concentracaoClientes.lista[0].pct.toFixed(0)}% da receita de ${periodoLabel} — risco de concentração num só cliente.` });
+    }
+    const atrasados = pagamentosPendentes.filter((p) => p.data && p.data < todayISO());
+    if (atrasados.length > 0) {
+      const valorAtrasado = atrasados.reduce((s, p) => s + (Number(p.valor) || 0), 0);
+      list.push({ tipo: "amber", texto: `${atrasados.length} pagamento(s) com data prevista já passada, ainda por receber (${fmtEUR(valorAtrasado)}).` });
+    }
+    if (totais.valorAno === 0 && mesesSelecionados.length <= 3) {
+      list.push({ tipo: "navy", texto: `Sem receita adjudicada registada em ${periodoLabel}.` });
+    }
+    return list;
+  }, [totais, custosFixosMensais, concentracaoClientes, pagamentosPendentes, mesesSelecionados, periodoLabel]);
 
   const lucroPorObra = useMemo(() => {
     return obras
@@ -1784,12 +1913,35 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
         </div>
       </div>
 
+      {alertas.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
+          {alertas.map((a, i) => {
+            const cor = a.tipo === "rust" ? T.rust : a.tipo === "amber" ? T.amber : T.navy;
+            const Icon = a.tipo === "rust" ? AlertTriangle : a.tipo === "amber" ? Clock : FileText;
+            return (
+              <div key={i} style={{
+                display: "flex", alignItems: "center", gap: 8, padding: "8px 12px",
+                background: `${cor}18`, border: `1px solid ${cor}`, borderRadius: 4, fontSize: 13, color: T.ink,
+              }}>
+                <Icon size={14} color={cor} />
+                {a.texto}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
-        <KpiCard icon={Euro} label={`Adjudicado — ${periodoLabel}`} value={fmtEUR(totais.valorAno)} accent={T.green} />
-        <KpiCard icon={Wallet} label={`Despesas — ${periodoLabel}`} value={fmtEUR(totais.custosTotaisAno)} sub="Custos de obra + gerais" accent={T.rust} />
-        <KpiCard icon={TrendingUp} label={`Lucro líquido — ${periodoLabel}`} value={fmtEUR(totais.lucroLiquido)} sub={totais.lucroLiquido >= 0 ? "Positivo" : "Negativo"} accent={totais.lucroLiquido >= 0 ? T.green : T.rust} />
-        <KpiCard icon={TrendingUp} label="Margem líquida" value={totais.margemLiquidaPct !== null ? `${totais.margemLiquidaPct.toFixed(1)}%` : "—"} sub="Lucro ÷ receita" accent={totais.margemLiquidaPct >= 0 ? T.green : T.rust} />
+        <KpiCard icon={Euro} label={`Adjudicado — ${periodoLabel}`} value={fmtEUR(totais.valorAno)} accent={T.green}
+          delta={<DeltaBadge atual={totais.valorAno} anterior={totaisAnteriores.receita} />} />
+        <KpiCard icon={Wallet} label={`Despesas — ${periodoLabel}`} value={fmtEUR(totais.custosTotaisAno)} sub="Custos de obra + gerais" accent={T.rust}
+          delta={<DeltaBadge atual={totais.custosTotaisAno} anterior={totaisAnteriores.despesaTotal} invertido />} />
+        <KpiCard icon={TrendingUp} label={`Lucro líquido — ${periodoLabel}`} value={fmtEUR(totais.lucroLiquido)} sub={totais.lucroLiquido >= 0 ? "Positivo" : "Negativo"} accent={totais.lucroLiquido >= 0 ? T.green : T.rust}
+          delta={<DeltaBadge atual={totais.lucroLiquido} anterior={totaisAnteriores.lucro} />} />
+        <KpiCard icon={TrendingUp} label="Margem líquida" value={totais.margemLiquidaPct !== null ? `${totais.margemLiquidaPct.toFixed(1)}%` : "—"} sub="Lucro ÷ receita" accent={totais.margemLiquidaPct >= 0 ? T.green : T.rust}
+          delta={totais.margemLiquidaPct !== null && <DeltaBadge atual={totais.margemLiquidaPct} anterior={totaisAnteriores.margemPct} />} />
         <KpiCard icon={Wallet} label="Custos fixos / mês" value={fmtEUR(custosFixosMensais)} sub="Despesas gerais marcadas 'Mensal'" accent={T.amber} />
+        <KpiCard icon={Clock} label="Prazo médio de recebimento" value={prazoMedioRecebimento !== null ? `${prazoMedioRecebimento} dias` : "—"} sub="Da adjudicação ao pagamento" />
         <KpiCard icon={Package} label="Valor em pipeline" value={fmtEUR(totais.pipeline)} sub="Ainda por decidir" />
         <KpiCard icon={Clock} label="Por receber" value={fmtEUR(totais.pendente)} sub="Pagamentos pendentes" accent={T.amber} />
         <KpiCard icon={XCircle} label="Perdido (rejeitado pelo cliente)" value={fmtEUR(totais.rejeitadoValor)} sub="Conta para a taxa de conversão" accent={T.rust} />
@@ -1814,6 +1966,43 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
           </BarChart>
         </ResponsiveContainer>
       </div>
+
+      <CutDivider label="Previsão de Tesouraria — próximos 6 meses" />
+      <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6, padding: "16px 20px", height: 280 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={previsaoTesouraria} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={T.line} vertical={false} />
+            <XAxis dataKey="mes" tick={{ fontSize: 11, fontFamily: "Inter" }} />
+            <YAxis tick={{ fontSize: 11, fontFamily: "Inter" }} />
+            <Tooltip formatter={(v) => fmtEUR(v)} contentStyle={{ fontFamily: "Inter", fontSize: 12, borderRadius: 4, border: `1px solid ${T.line}` }} />
+            <Legend wrapperStyle={{ fontSize: 12, fontFamily: "Inter" }} />
+            <Bar dataKey="entradas" name="Entradas previstas" fill={T.green} radius={[3, 3, 0, 0]} />
+            <Bar dataKey="saidas" name="Saídas previstas" fill={T.rust} radius={[3, 3, 0, 0]} />
+            <Line type="monotone" dataKey="acumulado" name="Saldo acumulado" stroke={T.navy} strokeWidth={2} dot={{ r: 3 }} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+      <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 6, fontStyle: "italic" }}>
+        "Entradas" vêm dos pagamentos ainda por receber que já têm data prevista na ficha da obra. "Saídas" são as despesas gerais marcadas como "Mensal" (aplicadas todos os meses) mais qualquer despesa pontual já agendada para esse mês. Não inclui receita de obras que ainda vais fechar.
+      </div>
+
+      <CutDivider label={`Concentração de Clientes — ${periodoLabel}`} />
+      {concentracaoClientes.lista.length > 0 ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {concentracaoClientes.lista.slice(0, 6).map((c) => (
+            <div key={c.cliente} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
+              <span style={{ minWidth: 160, flexShrink: 0 }}>{c.cliente}</span>
+              <div style={{ flex: 1, background: T.paper3, borderRadius: 3, height: 16, position: "relative", overflow: "hidden" }}>
+                <div style={{ width: `${Math.min(c.pct, 100)}%`, height: "100%", background: c.pct >= 40 ? T.rust : T.walnut, borderRadius: 3 }} />
+              </div>
+              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, minWidth: 44, textAlign: "right" }}>{c.pct.toFixed(0)}%</span>
+              <span style={{ fontFamily: "'JetBrains Mono', monospace", opacity: 0.6, minWidth: 90, textAlign: "right" }}>{fmtEUR(c.valor)}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ fontSize: 13, opacity: 0.55 }}>Sem receita adjudicada em {periodoLabel} para calcular concentração.</div>
+      )}
 
       <CutDivider label={`Despesas por categoria — ${periodoLabel}`} />
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1.2fr)", gap: 16, alignItems: "center" }}>
