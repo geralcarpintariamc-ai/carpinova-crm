@@ -1635,7 +1635,11 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
     return Array.from(set).sort().reverse();
   }, [obras, despesas]);
   const [ano, setAno] = useState(anos[0]);
+  const [periodoTipo, setPeriodoTipo] = useState("ano"); // "ano" | "trimestre" | "mes"
+  const [periodoValor, setPeriodoValor] = useState(1); // nº do trimestre (1-4) ou do mês (1-12)
   const [novaDespesa, setNovaDespesa] = useState({ descricao: "", categoria: CATEGORIAS_DESPESA[0], valor: "", data: todayISO(), recorrente: false });
+
+  const MESES_NOMES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 
   const despesasGerais = useMemo(() => despesas.filter((d) => !d.obraId), [despesas]);
 
@@ -1657,9 +1661,25 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
 
   const mesesDoAno = useMemo(() => Array.from({ length: 12 }, (_, i) => `${ano}-${String(i + 1).padStart(2, "0")}`), [ano]);
 
+  // Meses realmente incluídos consoante o período escolhido (ano inteiro,
+  // um trimestre de 3 meses, ou um único mês).
+  const mesesSelecionados = useMemo(() => {
+    if (periodoTipo === "mes") return [mesesDoAno[periodoValor - 1]];
+    if (periodoTipo === "trimestre") {
+      const inicio = (periodoValor - 1) * 3;
+      return mesesDoAno.slice(inicio, inicio + 3);
+    }
+    return mesesDoAno;
+  }, [mesesDoAno, periodoTipo, periodoValor]);
+  const mesesSelecionadosSet = useMemo(() => new Set(mesesSelecionados), [mesesSelecionados]);
+
+  const periodoLabel = periodoTipo === "mes" ? `${MESES_NOMES[periodoValor - 1]} ${ano}`
+    : periodoTipo === "trimestre" ? `T${periodoValor} ${ano}`
+    : `${ano}`;
+
   const dadosMensais = useMemo(() => {
     const despesasObra = despesas.filter((d) => d.obraId);
-    return mesesDoAno.map((mesKey) => {
+    return mesesSelecionados.map((mesKey) => {
       const receita = obras.filter((o) => WON_KEYS.includes(o.estado)).reduce((s, o) => {
         const d = o.dataAdjudicacao || o.dataInicioObra || o.dataEntrada;
         return d && d.slice(0, 7) === mesKey ? s + (Number(o.valorAdjudicado) || 0) : s;
@@ -1668,16 +1688,16 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
       const despesaObra = despesasObra.reduce((s, d) => s + despesaValorNoMes(d, mesKey), 0);
       return { mes: monthLabel(mesKey), receita, despesa: despesaGeral + despesaObra, despesaGeral, despesaObra };
     });
-  }, [obras, despesas, despesasGerais, mesesDoAno]);
+  }, [obras, despesas, despesasGerais, mesesSelecionados]);
 
   const despesasPorCategoria = useMemo(() => {
     const map = {};
     despesas.forEach((d) => {
-      const total = mesesDoAno.reduce((s, mesKey) => s + despesaValorNoMes(d, mesKey), 0);
+      const total = mesesSelecionados.reduce((s, mesKey) => s + despesaValorNoMes(d, mesKey), 0);
       if (total > 0) map[d.categoria] = (map[d.categoria] || 0) + total;
     });
     return Object.entries(map).map(([categoria, valor]) => ({ categoria, valor })).sort((a, b) => b.valor - a.valor);
-  }, [despesas, mesesDoAno]);
+  }, [despesas, mesesSelecionados]);
 
   const CATEGORIA_CORES = [T.walnut, T.amber, T.navy, T.green, T.rust, "#8A6A1E", "#5C6B8A", "#6B7F3E", "#3D4F44"];
 
@@ -1688,11 +1708,11 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
 
   const totais = useMemo(() => {
     const won = obras.filter((o) => WON_KEYS.includes(o.estado));
-    const wonAno = won.filter((o) => (o.dataAdjudicacao || o.dataInicioObra || o.dataEntrada || "").startsWith(ano));
-    const valorAno = wonAno.reduce((s, o) => s + (Number(o.valorAdjudicado) || 0), 0);
+    const valorPeriodo = dadosMensais.reduce((s, m) => s + m.receita, 0);
     const pipeline = obras.filter((o) => ACTIVE_KEYS.includes(o.estado)).reduce((s, o) => s + (Number(o.valorOrcamento) || 0), 0);
-    const rejeitadoValor = obras.filter((o) => LOST_KEYS.includes(o.estado)).reduce((s, o) => s + (Number(o.valorOrcamento) || 0), 0);
-    const recusadoPorNosValor = obras.filter((o) => o.estado === "rejeitado_nos").reduce((s, o) => s + (Number(o.valorOrcamento) || 0), 0);
+    const noPeriodo = (o) => mesesSelecionadosSet.has((o.dataEntrada || "").slice(0, 7));
+    const rejeitadoValor = obras.filter((o) => LOST_KEYS.includes(o.estado) && noPeriodo(o)).reduce((s, o) => s + (Number(o.valorOrcamento) || 0), 0);
+    const recusadoPorNosValor = obras.filter((o) => o.estado === "rejeitado_nos" && noPeriodo(o)).reduce((s, o) => s + (Number(o.valorOrcamento) || 0), 0);
 
     let pendente = 0, recebido = 0;
     won.forEach((o) => (o.pagamentos || []).forEach((p) => { if (p.pago) recebido += p.valor; else pendente += p.valor; }));
@@ -1700,11 +1720,11 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
     const totalDespesasGeraisAno = dadosMensais.reduce((s, m) => s + m.despesaGeral, 0);
     const totalCustosObrasAno = dadosMensais.reduce((s, m) => s + m.despesaObra, 0);
     const custosTotaisAno = totalDespesasGeraisAno + totalCustosObrasAno;
-    const lucroLiquido = valorAno - custosTotaisAno;
-    const margemLiquidaPct = valorAno > 0 ? (lucroLiquido / valorAno) * 100 : null;
+    const lucroLiquido = valorPeriodo - custosTotaisAno;
+    const margemLiquidaPct = valorPeriodo > 0 ? (lucroLiquido / valorPeriodo) * 100 : null;
 
-    return { valorAno, pipeline, rejeitadoValor, recusadoPorNosValor, pendente, recebido, totalCustosObrasAno, totalDespesasGeraisAno, custosTotaisAno, lucroLiquido, margemLiquidaPct };
-  }, [obras, ano, dadosMensais]);
+    return { valorAno: valorPeriodo, pipeline, rejeitadoValor, recusadoPorNosValor, pendente, recebido, totalCustosObrasAno, totalDespesasGeraisAno, custosTotaisAno, lucroLiquido, margemLiquidaPct };
+  }, [obras, dadosMensais, mesesSelecionadosSet]);
 
   const pagamentosPendentes = useMemo(() => {
     const list = [];
@@ -1740,19 +1760,34 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <Calendar size={15} color={T.walnut} />
           <select style={selectStyle} value={ano} onChange={(e) => setAno(e.target.value)}>
             {anos.map((a) => <option key={a} value={a}>{a}</option>)}
           </select>
+          <select style={selectStyle} value={periodoTipo} onChange={(e) => { setPeriodoTipo(e.target.value); setPeriodoValor(1); }}>
+            <option value="ano">Anual</option>
+            <option value="trimestre">Trimestral</option>
+            <option value="mes">Mensal</option>
+          </select>
+          {periodoTipo === "trimestre" && (
+            <select style={selectStyle} value={periodoValor} onChange={(e) => setPeriodoValor(Number(e.target.value))}>
+              {[1, 2, 3, 4].map((q) => <option key={q} value={q}>T{q} ({MESES_NOMES[(q - 1) * 3].slice(0, 3)}–{MESES_NOMES[(q - 1) * 3 + 2].slice(0, 3)})</option>)}
+            </select>
+          )}
+          {periodoTipo === "mes" && (
+            <select style={selectStyle} value={periodoValor} onChange={(e) => setPeriodoValor(Number(e.target.value))}>
+              {MESES_NOMES.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+            </select>
+          )}
         </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
-        <KpiCard icon={Euro} label={`Adjudicado ${ano}`} value={fmtEUR(totais.valorAno)} accent={T.green} />
-        <KpiCard icon={Wallet} label={`Despesas ${ano}`} value={fmtEUR(totais.custosTotaisAno)} sub="Custos de obra + gerais" accent={T.rust} />
-        <KpiCard icon={TrendingUp} label={`Lucro líquido ${ano}`} value={fmtEUR(totais.lucroLiquido)} sub={totais.lucroLiquido >= 0 ? "Positivo" : "Negativo"} accent={totais.lucroLiquido >= 0 ? T.green : T.rust} />
+        <KpiCard icon={Euro} label={`Adjudicado — ${periodoLabel}`} value={fmtEUR(totais.valorAno)} accent={T.green} />
+        <KpiCard icon={Wallet} label={`Despesas — ${periodoLabel}`} value={fmtEUR(totais.custosTotaisAno)} sub="Custos de obra + gerais" accent={T.rust} />
+        <KpiCard icon={TrendingUp} label={`Lucro líquido — ${periodoLabel}`} value={fmtEUR(totais.lucroLiquido)} sub={totais.lucroLiquido >= 0 ? "Positivo" : "Negativo"} accent={totais.lucroLiquido >= 0 ? T.green : T.rust} />
         <KpiCard icon={TrendingUp} label="Margem líquida" value={totais.margemLiquidaPct !== null ? `${totais.margemLiquidaPct.toFixed(1)}%` : "—"} sub="Lucro ÷ receita" accent={totais.margemLiquidaPct >= 0 ? T.green : T.rust} />
         <KpiCard icon={Wallet} label="Custos fixos / mês" value={fmtEUR(custosFixosMensais)} sub="Despesas gerais marcadas 'Mensal'" accent={T.amber} />
         <KpiCard icon={Package} label="Valor em pipeline" value={fmtEUR(totais.pipeline)} sub="Ainda por decidir" />
@@ -1765,7 +1800,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
         "Custos fixos / mês" soma as despesas gerais marcadas como "Mensal" — não precisas de as lançar todos os meses; contam automaticamente a partir do mês em que as puseste, mês após mês. É o valor mínimo que precisas de faturar só para cobrir os custos fixos, antes de dar lucro.
       </div>
 
-      <CutDivider label={`Receita vs. Despesas por mês — ${ano}`} />
+      <CutDivider label={`Receita vs. Despesas por mês — ${periodoLabel}`} />
       <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6, padding: "16px 20px", height: 280 }}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={dadosMensais} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
@@ -1780,7 +1815,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
         </ResponsiveContainer>
       </div>
 
-      <CutDivider label={`Despesas por categoria — ${ano}`} />
+      <CutDivider label={`Despesas por categoria — ${periodoLabel}`} />
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1.2fr)", gap: 16, alignItems: "center" }}>
         <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6, padding: "12px", height: 240 }}>
           {despesasPorCategoria.length > 0 ? (
