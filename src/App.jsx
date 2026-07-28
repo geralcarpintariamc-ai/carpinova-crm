@@ -662,7 +662,7 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
   const [local, setLocal] = useState(obra);
   const [novaNota, setNovaNota] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [novaCotacao, setNovaCotacao] = useState({ fornecedor: "", material: "", valor: "" });
+  const [novaCotacao, setNovaCotacao] = useState({ fornecedor: "", material: "", quantidade: "", valor: "" });
 
   useEffect(() => setLocal(obra), [obra]);
 
@@ -680,11 +680,12 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
     if (!novaCotacao.fornecedor.trim()) return;
     const cotacoes = [...(local.cotacoes || []), {
       id: uid(), fornecedor: novaCotacao.fornecedor.trim(), material: novaCotacao.material.trim(),
+      quantidade: novaCotacao.quantidade.trim(),
       valor: novaCotacao.valor === "" ? null : Number(novaCotacao.valor),
       estado: "pedido", dataPedido: todayISO(), notas: "",
     }];
     commit({ cotacoes });
-    setNovaCotacao({ fornecedor: "", material: "", valor: "" });
+    setNovaCotacao({ fornecedor: "", material: "", quantidade: "", valor: "" });
   };
   const updateCotacao = (idx, patch) => {
     const cotacoes = local.cotacoes.map((c, i) => (i === idx ? { ...c, ...patch } : c));
@@ -694,6 +695,16 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
     const cotacoes = local.cotacoes.filter((_, i) => i !== idx);
     commit({ cotacoes });
   };
+
+  const totalCotacoes = useMemo(() => (local.cotacoes || []).reduce((s, c) => s + (Number(c.valor) || 0), 0), [local.cotacoes]);
+  const cotacoesPorFornecedor = useMemo(() => {
+    const map = {};
+    (local.cotacoes || []).forEach((c) => {
+      const nome = c.fornecedor || "(sem fornecedor)";
+      map[nome] = (map[nome] || 0) + (Number(c.valor) || 0);
+    });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [local.cotacoes]);
 
   const [uploading, setUploading] = useState(false);
   const [uploadErro, setUploadErro] = useState("");
@@ -794,7 +805,7 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
         onClick={(e) => e.stopPropagation()}
         style={{
           background: T.paper, borderRadius: 8, width: "100%", maxWidth: 760,
-          border: `1px solid ${T.line}`, boxShadow: "0 20px 50px rgba(0,0,0,0.3)",
+          border: `1px solid ${T.line}`, boxShadow: "0 20px 50px rgba(0,0,0,0.3)", overflowX: "hidden",
         }}
       >
         {/* Header */}
@@ -909,7 +920,7 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
             {custosObra.length === 0 && <div style={{ fontSize: 12, opacity: 0.55 }}>Sem custos registados para esta obra.</div>}
             {custosObra.map((c) => (
               <div key={c.id} style={{
-                display: "grid", gridTemplateColumns: "1.4fr 1fr 0.8fr auto", gap: 8, alignItems: "center",
+                display: "grid", gridTemplateColumns: "minmax(0,1.4fr) minmax(0,1fr) minmax(0,0.8fr) auto", gap: 8, alignItems: "center",
                 padding: "7px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13,
               }}>
                 <input style={{ ...inputStyle, fontSize: 12 }} value={c.descricao} onChange={(e) => onUpdateDespesa(c.id, { descricao: e.target.value })} />
@@ -920,7 +931,7 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
                 <button onClick={() => onDeleteDespesa(c.id)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={13} /></button>
               </div>
             ))}
-            <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.8fr auto", gap: 8 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.4fr) minmax(0,1fr) minmax(0,0.8fr) auto", gap: 8 }}>
               <input style={inputStyle} placeholder="Descrição do custo" value={novoCusto.descricao} onChange={(e) => setNovoCusto((s) => ({ ...s, descricao: e.target.value }))} />
               <select style={selectStyle} value={novoCusto.categoria} onChange={(e) => setNovoCusto((s) => ({ ...s, categoria: e.target.value }))}>
                 {CATEGORIAS_DESPESA.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
@@ -988,41 +999,61 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
           )}
 
           <CutDivider label="Fornecedores / Pedidos de Cotação" />
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
             {(local.cotacoes || []).length === 0 && (
               <div style={{ fontSize: 12, opacity: 0.55 }}>Sem pedidos de cotação registados para esta obra.</div>
             )}
-            {(local.cotacoes || []).map((c, i) => {
-              const est = cotacaoEstadoOf(c.estado);
-              return (
-                <div key={c.id || i} style={{
-                  display: "grid", gridTemplateColumns: "1.3fr 1.3fr 0.9fr 1fr auto", gap: 8, alignItems: "center",
-                  padding: "8px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4,
-                }}>
-                  <input style={{ ...inputStyle, fontSize: 12 }} value={c.fornecedor} list="fornecedores-datalist"
-                    onChange={(e) => updateCotacao(i, { fornecedor: e.target.value })} placeholder="Fornecedor" />
-                  <input style={{ ...inputStyle, fontSize: 12 }} value={c.material}
-                    onChange={(e) => updateCotacao(i, { material: e.target.value })} placeholder="Material / serviço" />
-                  <input type="number" style={{ ...inputStyle, fontSize: 12 }} value={c.valor ?? ""} placeholder="Valor €"
-                    onChange={(e) => updateCotacao(i, { valor: e.target.value === "" ? null : Number(e.target.value) })} />
-                  <select style={{ ...selectStyle, fontSize: 12 }} value={c.estado} onChange={(e) => updateCotacao(i, { estado: e.target.value })}>
-                    {COTACAO_ESTADOS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-                  </select>
-                  <button onClick={() => removeCotacao(i)} title="Remover" style={{ background: "none", border: "none", cursor: "pointer", color: T.rust, padding: 4 }}>
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              );
-            })}
-            <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1.3fr 0.9fr auto", gap: 8, marginTop: 4 }}>
-              <input style={inputStyle} list="fornecedores-datalist" placeholder="Novo fornecedor…" value={novaCotacao.fornecedor} onChange={(e) => setNovaCotacao((s) => ({ ...s, fornecedor: e.target.value }))} />
-              <input style={inputStyle} placeholder="Material / serviço" value={novaCotacao.material} onChange={(e) => setNovaCotacao((s) => ({ ...s, material: e.target.value }))} />
-              <input type="number" style={inputStyle} placeholder="Valor €" value={novaCotacao.valor} onChange={(e) => setNovaCotacao((s) => ({ ...s, valor: e.target.value }))} />
+            {(local.cotacoes || []).map((c, i) => (
+              <div key={c.id || i} style={{
+                display: "grid",
+                gridTemplateColumns: "minmax(0,1.1fr) minmax(0,1.1fr) minmax(0,0.55fr) minmax(0,0.8fr) minmax(0,0.9fr) auto",
+                gap: 6, alignItems: "center", minWidth: 0,
+                padding: "8px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4,
+              }}>
+                <input style={{ ...inputStyle, fontSize: 12, minWidth: 0 }} value={c.fornecedor} list="fornecedores-datalist"
+                  onChange={(e) => updateCotacao(i, { fornecedor: e.target.value })} placeholder="Fornecedor" />
+                <input style={{ ...inputStyle, fontSize: 12, minWidth: 0 }} value={c.material}
+                  onChange={(e) => updateCotacao(i, { material: e.target.value })} placeholder="Material / serviço" />
+                <input style={{ ...inputStyle, fontSize: 12, minWidth: 0 }} value={c.quantidade || ""} placeholder="Qtd."
+                  onChange={(e) => updateCotacao(i, { quantidade: e.target.value })} />
+                <input type="number" style={{ ...inputStyle, fontSize: 12, minWidth: 0 }} value={c.valor ?? ""} placeholder="Valor €"
+                  onChange={(e) => updateCotacao(i, { valor: e.target.value === "" ? null : Number(e.target.value) })} />
+                <select style={{ ...selectStyle, fontSize: 12, minWidth: 0 }} value={c.estado} onChange={(e) => updateCotacao(i, { estado: e.target.value })}>
+                  {COTACAO_ESTADOS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+                </select>
+                <button onClick={() => removeCotacao(i)} title="Remover" style={{ background: "none", border: "none", cursor: "pointer", color: T.rust, padding: 4 }}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+            <div style={{
+              display: "grid", gridTemplateColumns: "minmax(0,1.1fr) minmax(0,1.1fr) minmax(0,0.55fr) minmax(0,0.8fr) auto",
+              gap: 6, marginTop: 4, minWidth: 0,
+            }}>
+              <input style={{ ...inputStyle, minWidth: 0 }} list="fornecedores-datalist" placeholder="Novo fornecedor…" value={novaCotacao.fornecedor} onChange={(e) => setNovaCotacao((s) => ({ ...s, fornecedor: e.target.value }))} />
+              <input style={{ ...inputStyle, minWidth: 0 }} placeholder="Material / serviço" value={novaCotacao.material} onChange={(e) => setNovaCotacao((s) => ({ ...s, material: e.target.value }))} />
+              <input style={{ ...inputStyle, minWidth: 0 }} placeholder="Qtd." value={novaCotacao.quantidade} onChange={(e) => setNovaCotacao((s) => ({ ...s, quantidade: e.target.value }))} />
+              <input type="number" style={{ ...inputStyle, minWidth: 0 }} placeholder="Valor €" value={novaCotacao.valor} onChange={(e) => setNovaCotacao((s) => ({ ...s, valor: e.target.value }))} />
               <Btn small icon={Plus} onClick={addCotacao}>Pedir</Btn>
             </div>
             <datalist id="fornecedores-datalist">
               {fornecedorNomesList.map((n) => <option key={n} value={n} />)}
             </datalist>
+
+            {(local.cotacoes || []).length > 0 && (
+              <div style={{ display: "flex", gap: 16, marginTop: 8, padding: "10px 12px", background: T.paper3, borderRadius: 4, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 10.5, textTransform: "uppercase", opacity: 0.6, fontWeight: 600 }}>Total pedido nesta obra</div>
+                  <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 15, color: T.walnutDark }}>{fmtEUR(totalCotacoes)}</div>
+                </div>
+                {cotacoesPorFornecedor.map(([nome, total]) => (
+                  <div key={nome}>
+                    <div style={{ fontSize: 10.5, textTransform: "uppercase", opacity: 0.6, fontWeight: 600 }}>{nome}</div>
+                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 15 }}>{fmtEUR(total)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <CutDivider label="Anexos (faturas, PDFs, Excel, fotos…)" />
@@ -1582,7 +1613,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
         {despesasGerais.length === 0 && <div style={{ fontSize: 13, opacity: 0.6 }}>Sem despesas gerais registadas.</div>}
         {despesasGerais.map((d) => (
           <div key={d.id} style={{
-            display: "grid", gridTemplateColumns: "1.6fr 1fr 0.8fr 0.9fr auto auto", gap: 8, alignItems: "center",
+            display: "grid", gridTemplateColumns: "minmax(0,1.6fr) minmax(0,1fr) minmax(0,0.8fr) minmax(0,0.9fr) auto auto", gap: 8, alignItems: "center",
             padding: "7px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13,
           }}>
             <input style={{ ...inputStyle, fontSize: 12 }} value={d.descricao} onChange={(e) => onUpdateDespesa(d.id, { descricao: e.target.value })} />
@@ -1597,7 +1628,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
             <button onClick={() => onDeleteDespesa(d.id)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={13} /></button>
           </div>
         ))}
-        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 0.8fr 0.9fr auto auto", gap: 8, marginTop: 4 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.6fr) minmax(0,1fr) minmax(0,0.8fr) minmax(0,0.9fr) auto auto", gap: 8, marginTop: 4 }}>
           <input style={inputStyle} placeholder="ex: Renda do armazém" value={novaDespesa.descricao} onChange={(e) => setNovaDespesa((s) => ({ ...s, descricao: e.target.value }))} />
           <select style={selectStyle} value={novaDespesa.categoria} onChange={(e) => setNovaDespesa((s) => ({ ...s, categoria: e.target.value }))}>
             {CATEGORIAS_DESPESA.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
@@ -1925,6 +1956,7 @@ export default function App() {
       <style>{FONT_IMPORT}</style>
       <style>{`
         * { box-sizing: border-box; }
+        input, select, textarea { min-width: 0; }
         ::-webkit-scrollbar { height: 8px; width: 8px; }
         ::-webkit-scrollbar-thumb { background: ${T.line}; border-radius: 4px; }
         input:focus, select:focus, textarea:focus { border-color: ${T.walnut} !important; }
