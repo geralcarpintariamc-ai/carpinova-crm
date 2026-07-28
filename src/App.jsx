@@ -64,6 +64,12 @@ const CLIENTE_TIPOS = [
 ];
 const tipoClienteOf = (key) => CLIENTE_TIPOS.find((c) => c.key === key);
 
+/* Categorias de despesa — usadas tanto nos custos de obra como nas despesas gerais */
+const CATEGORIAS_DESPESA = [
+  "Material", "Mão de obra", "Subcontratado", "Transporte",
+  "Renda / Instalações", "Salários", "Equipamento / Ferramentas", "Combustível", "Outro",
+];
+
 /* Estados de uma cotação pedida a fornecedor */
 const COTACAO_ESTADOS = [
   { key: "pedido", label: "Pedido", color: "#2C3E50" },
@@ -485,6 +491,81 @@ function useFornecedoresStore() {
 }
 
 /* ============================================================
+   DESPESAS STORE — custos de obra (obraId preenchido) e despesas
+   gerais da empresa (obraId = null), tudo na mesma tabela
+   ============================================================ */
+function useDespesasStore() {
+  const [despesas, setDespesas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const dRef = useRef([]);
+  dRef.current = despesas;
+
+  useEffect(() => {
+    let channel;
+    let cancelled = false;
+
+    (async () => {
+      const { data, error } = await supabase.from("despesas").select("id, payload").order("updated_at", { ascending: false });
+      if (cancelled) return;
+
+      if (error) {
+        console.error("Erro a carregar despesas:", error);
+        setLoading(false);
+        return;
+      }
+      setDespesas((data || []).map((r) => ({ ...r.payload, id: r.id })));
+      setLoading(false);
+
+      channel = supabase
+        .channel("despesas-realtime")
+        .on("postgres_changes", { event: "*", schema: "public", table: "despesas" }, (msg) => {
+          setDespesas((cur) => {
+            if (msg.eventType === "DELETE") return cur.filter((d) => d.id !== msg.old.id);
+            const incoming = { ...msg.new.payload, id: msg.new.id };
+            const existe = cur.some((d) => d.id === incoming.id);
+            return existe ? cur.map((d) => (d.id === incoming.id ? incoming : d)) : [incoming, ...cur];
+          });
+        })
+        .subscribe();
+    })();
+
+    return () => { cancelled = true; if (channel) supabase.removeChannel(channel); };
+  }, []);
+
+  const persistRow = useCallback(async (id, payload) => {
+    const { error } = await supabase.from("despesas").upsert({ id, payload, updated_at: new Date().toISOString() }, { onConflict: "id" });
+    if (error) console.error("Erro a gravar despesa:", error);
+  }, []);
+
+  const addDespesa = useCallback((partial) => {
+    const nova = {
+      id: uid(), descricao: "", categoria: CATEGORIAS_DESPESA[0], valor: null,
+      data: todayISO(), obraId: null, recorrente: false, notas: "",
+      ...partial,
+    };
+    setDespesas((cur) => [nova, ...cur]);
+    persistRow(nova.id, nova);
+    return nova.id;
+  }, [persistRow]);
+
+  const updateDespesa = useCallback((id, patch) => {
+    const next = dRef.current.map((d) => (d.id === id ? { ...d, ...patch } : d));
+    setDespesas(next);
+    const atualizado = next.find((d) => d.id === id);
+    if (atualizado) persistRow(id, atualizado);
+  }, [persistRow]);
+
+  const deleteDespesa = useCallback((id) => {
+    setDespesas((cur) => cur.filter((d) => d.id !== id));
+    supabase.from("despesas").delete().eq("id", id).then(({ error }) => {
+      if (error) console.error("Erro a eliminar despesa:", error);
+    });
+  }, []);
+
+  return { despesas, loading, addDespesa, updateDespesa, deleteDespesa };
+}
+
+/* ============================================================
    PEQUENOS COMPONENTES
    ============================================================ */
 function Tag({ children, color }) {
@@ -577,7 +658,7 @@ function Btn({ children, onClick, variant = "primary", icon: Icon, small, type =
 /* ============================================================
    MODAL — DETALHE DA OBRA
    ============================================================ */
-function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, onDelete, fornecedorNomes }) {
+function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, onDelete, fornecedorNomes, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespesa }) {
   const [local, setLocal] = useState(obra);
   const [novaNota, setNovaNota] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -663,6 +744,22 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
     if (n < 1024) return `${n} B`;
     if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
     return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const [novoCusto, setNovoCusto] = useState({ descricao: "", categoria: CATEGORIAS_DESPESA[0], valor: "" });
+  const custosObra = useMemo(() => (despesas || []).filter((d) => d.obraId === obra.id), [despesas, obra.id]);
+  const totalCustos = useMemo(() => custosObra.reduce((s, d) => s + (Number(d.valor) || 0), 0), [custosObra]);
+  const margemReal = local.valorAdjudicado ? Number(local.valorAdjudicado) - totalCustos : null;
+  const margemRealPct = local.valorAdjudicado && Number(local.valorAdjudicado) > 0
+    ? (margemReal / Number(local.valorAdjudicado)) * 100 : null;
+
+  const addCusto = () => {
+    if (!novoCusto.descricao.trim()) return;
+    onAddDespesa({
+      obraId: obra.id, descricao: novoCusto.descricao.trim(), categoria: novoCusto.categoria,
+      valor: novoCusto.valor === "" ? null : Number(novoCusto.valor), data: todayISO(),
+    });
+    setNovoCusto({ descricao: "", categoria: CATEGORIAS_DESPESA[0], valor: "" });
   };
 
   const gerarPagamentos = () => {
@@ -805,6 +902,60 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
             <Field label="Margem aplicada (%)">
               <input type="number" style={inputStyle} value={local.margem ?? ""} onChange={(e) => set({ margem: e.target.value === "" ? null : e.target.value })} onBlur={() => commit({ margem: local.margem })} />
             </Field>
+          </div>
+
+          <CutDivider label="Custos da Obra & Margem Real" />
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {custosObra.length === 0 && <div style={{ fontSize: 12, opacity: 0.55 }}>Sem custos registados para esta obra.</div>}
+            {custosObra.map((c) => (
+              <div key={c.id} style={{
+                display: "grid", gridTemplateColumns: "1.4fr 1fr 0.8fr auto", gap: 8, alignItems: "center",
+                padding: "7px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13,
+              }}>
+                <input style={{ ...inputStyle, fontSize: 12 }} value={c.descricao} onChange={(e) => onUpdateDespesa(c.id, { descricao: e.target.value })} />
+                <select style={{ ...selectStyle, fontSize: 12 }} value={c.categoria} onChange={(e) => onUpdateDespesa(c.id, { categoria: e.target.value })}>
+                  {CATEGORIAS_DESPESA.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
+                </select>
+                <input type="number" style={{ ...inputStyle, fontSize: 12 }} value={c.valor ?? ""} onChange={(e) => onUpdateDespesa(c.id, { valor: e.target.value === "" ? null : Number(e.target.value) })} placeholder="€" />
+                <button onClick={() => onDeleteDespesa(c.id)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={13} /></button>
+              </div>
+            ))}
+            <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.8fr auto", gap: 8 }}>
+              <input style={inputStyle} placeholder="Descrição do custo" value={novoCusto.descricao} onChange={(e) => setNovoCusto((s) => ({ ...s, descricao: e.target.value }))} />
+              <select style={selectStyle} value={novoCusto.categoria} onChange={(e) => setNovoCusto((s) => ({ ...s, categoria: e.target.value }))}>
+                {CATEGORIAS_DESPESA.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
+              </select>
+              <input type="number" style={inputStyle} placeholder="€" value={novoCusto.valor} onChange={(e) => setNovoCusto((s) => ({ ...s, valor: e.target.value }))} />
+              <Btn small icon={Plus} onClick={addCusto}>Add</Btn>
+            </div>
+            {(custosObra.length > 0 || local.valorAdjudicado) && (
+              <div style={{ display: "flex", gap: 16, marginTop: 8, padding: "10px 12px", background: T.paper3, borderRadius: 4, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 10.5, textTransform: "uppercase", opacity: 0.6, fontWeight: 600 }}>Total de custos</div>
+                  <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 15, color: T.walnutDark }}>{fmtEUR(totalCustos)}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10.5, textTransform: "uppercase", opacity: 0.6, fontWeight: 600 }}>Margem real</div>
+                  <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 15, color: margemReal >= 0 ? T.green : T.rust }}>
+                    {margemReal !== null ? fmtEUR(margemReal) : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10.5, textTransform: "uppercase", opacity: 0.6, fontWeight: 600 }}>Margem real %</div>
+                  <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 15, color: margemReal >= 0 ? T.green : T.rust }}>
+                    {margemRealPct !== null ? `${margemRealPct.toFixed(1)}%` : "—"}
+                  </div>
+                </div>
+                {local.tipoCliente && (
+                  <div>
+                    <div style={{ fontSize: 10.5, textTransform: "uppercase", opacity: 0.6, fontWeight: 600 }}>Margem sugerida</div>
+                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 15, opacity: 0.7 }}>
+                      {tipoClienteOf(local.tipoCliente)?.margem}%
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {COM_PAGAMENTOS_KEYS.includes(local.estado) && (
@@ -1272,29 +1423,46 @@ function ObrasTab({ obras, onOpen, onNew }) {
 /* ============================================================
    FINANCEIRO
    ============================================================ */
-function Financeiro({ obras }) {
+function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespesa }) {
   const anos = useMemo(() => {
     const set = new Set();
     obras.forEach((o) => {
       const d = o.dataAdjudicacao || o.dataInicioObra || o.dataEntrada;
       if (d) set.add(d.slice(0, 4));
     });
+    despesas.forEach((d) => { if (d.data) set.add(d.data.slice(0, 4)); });
     set.add(String(new Date().getFullYear()));
     return Array.from(set).sort().reverse();
-  }, [obras]);
+  }, [obras, despesas]);
   const [ano, setAno] = useState(anos[0]);
+  const [novaDespesa, setNovaDespesa] = useState({ descricao: "", categoria: CATEGORIAS_DESPESA[0], valor: "", data: todayISO(), recorrente: false });
+
+  const despesasGerais = useMemo(() => despesas.filter((d) => !d.obraId), [despesas]);
+  const despesasGeraisAno = useMemo(() => despesasGerais.filter((d) => (d.data || "").startsWith(ano)), [despesasGerais, ano]);
+  const custosObrasAno = useMemo(() => despesas.filter((d) => d.obraId && (d.data || "").startsWith(ano)), [despesas, ano]);
+
+  const custosPorObra = useMemo(() => {
+    const map = {};
+    despesas.filter((d) => d.obraId).forEach((d) => { map[d.obraId] = (map[d.obraId] || 0) + (Number(d.valor) || 0); });
+    return map;
+  }, [despesas]);
 
   const dadosMensais = useMemo(() => {
     const meses = {};
-    for (let m = 1; m <= 12; m++) meses[`${ano}-${String(m).padStart(2, "0")}`] = 0;
+    for (let m = 1; m <= 12; m++) meses[`${ano}-${String(m).padStart(2, "0")}`] = { receita: 0, despesa: 0 };
     obras.filter((o) => WON_KEYS.includes(o.estado)).forEach((o) => {
       const d = o.dataAdjudicacao || o.dataInicioObra || o.dataEntrada;
       if (!d || !d.startsWith(ano)) return;
       const key = d.slice(0, 7);
-      if (meses[key] !== undefined) meses[key] += Number(o.valorAdjudicado) || 0;
+      if (meses[key]) meses[key].receita += Number(o.valorAdjudicado) || 0;
     });
-    return Object.entries(meses).map(([k, v]) => ({ mes: monthLabel(k), valor: v }));
-  }, [obras, ano]);
+    despesas.forEach((d) => {
+      if (!d.data || !d.data.startsWith(ano)) return;
+      const key = d.data.slice(0, 7);
+      if (meses[key]) meses[key].despesa += Number(d.valor) || 0;
+    });
+    return Object.entries(meses).map(([k, v]) => ({ mes: monthLabel(k), receita: v.receita, despesa: v.despesa }));
+  }, [obras, despesas, ano]);
 
   const totais = useMemo(() => {
     const won = obras.filter((o) => WON_KEYS.includes(o.estado));
@@ -1306,8 +1474,13 @@ function Financeiro({ obras }) {
     let pendente = 0, recebido = 0;
     won.forEach((o) => (o.pagamentos || []).forEach((p) => { if (p.pago) recebido += p.valor; else pendente += p.valor; }));
 
-    return { valorAno, pipeline, rejeitadoValor, pendente, recebido };
-  }, [obras, ano]);
+    const totalCustosObrasAno = custosObrasAno.reduce((s, d) => s + (Number(d.valor) || 0), 0);
+    const totalDespesasGeraisAno = despesasGeraisAno.reduce((s, d) => s + (Number(d.valor) || 0), 0);
+    const custosTotaisAno = totalCustosObrasAno + totalDespesasGeraisAno;
+    const lucroLiquido = valorAno - custosTotaisAno;
+
+    return { valorAno, pipeline, rejeitadoValor, pendente, recebido, totalCustosObrasAno, totalDespesasGeraisAno, custosTotaisAno, lucroLiquido };
+  }, [obras, ano, custosObrasAno, despesasGeraisAno]);
 
   const pagamentosPendentes = useMemo(() => {
     const list = [];
@@ -1318,6 +1491,28 @@ function Financeiro({ obras }) {
     });
     return list;
   }, [obras]);
+
+  const lucroPorObra = useMemo(() => {
+    return obras
+      .filter((o) => o.valorAdjudicado)
+      .map((o) => {
+        const custos = custosPorObra[o.id] || 0;
+        const valor = Number(o.valorAdjudicado);
+        const margem = valor - custos;
+        return { id: o.id, projeto: o.projeto, cliente: o.cliente, valor, custos, margem, margemPct: valor > 0 ? (margem / valor) * 100 : 0 };
+      })
+      .sort((a, b) => b.margem - a.margem);
+  }, [obras, custosPorObra]);
+
+  const addDespesaGeral = () => {
+    if (!novaDespesa.descricao.trim()) return;
+    onAddDespesa({
+      descricao: novaDespesa.descricao.trim(), categoria: novaDespesa.categoria,
+      valor: novaDespesa.valor === "" ? null : Number(novaDespesa.valor),
+      data: novaDespesa.data, recorrente: novaDespesa.recorrente, obraId: null,
+    });
+    setNovaDespesa({ descricao: "", categoria: CATEGORIAS_DESPESA[0], valor: "", data: todayISO(), recorrente: false });
+  };
 
   return (
     <div>
@@ -1332,22 +1527,91 @@ function Financeiro({ obras }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
         <KpiCard icon={Euro} label={`Adjudicado ${ano}`} value={fmtEUR(totais.valorAno)} accent={T.green} />
+        <KpiCard icon={Wallet} label={`Despesas ${ano}`} value={fmtEUR(totais.custosTotaisAno)} sub="Custos de obra + gerais" accent={T.rust} />
+        <KpiCard icon={TrendingUp} label={`Lucro líquido ${ano}`} value={fmtEUR(totais.lucroLiquido)} sub={totais.lucroLiquido >= 0 ? "Positivo" : "Negativo"} accent={totais.lucroLiquido >= 0 ? T.green : T.rust} />
         <KpiCard icon={Package} label="Valor em pipeline" value={fmtEUR(totais.pipeline)} sub="Ainda por decidir" />
-        <KpiCard icon={Wallet} label="Por receber" value={fmtEUR(totais.pendente)} sub="Tranches pendentes" accent={T.amber} />
+        <KpiCard icon={Clock} label="Por receber" value={fmtEUR(totais.pendente)} sub="Tranches pendentes" accent={T.amber} />
         <KpiCard icon={XCircle} label="Perdido (orçamentado)" value={fmtEUR(totais.rejeitadoValor)} sub="Obras rejeitadas" accent={T.rust} />
       </div>
 
-      <CutDivider label={`Faturação adjudicada por mês — ${ano}`} />
-      <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6, padding: "16px 20px", height: 260 }}>
+      <CutDivider label={`Receita vs. Despesas por mês — ${ano}`} />
+      <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6, padding: "16px 20px", height: 280 }}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={dadosMensais} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={T.line} vertical={false} />
             <XAxis dataKey="mes" tick={{ fontSize: 11, fontFamily: "Inter" }} />
             <YAxis tick={{ fontSize: 11, fontFamily: "Inter" }} />
             <Tooltip formatter={(v) => fmtEUR(v)} contentStyle={{ fontFamily: "Inter", fontSize: 12, borderRadius: 4, border: `1px solid ${T.line}` }} />
-            <Bar dataKey="valor" fill={T.walnut} radius={[3, 3, 0, 0]} />
+            <Legend wrapperStyle={{ fontSize: 12, fontFamily: "Inter" }} />
+            <Bar dataKey="receita" name="Receita adjudicada" fill={T.green} radius={[3, 3, 0, 0]} />
+            <Bar dataKey="despesa" name="Despesas" fill={T.rust} radius={[3, 3, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
+      </div>
+
+      <CutDivider label="Lucro por obra" />
+      <div style={{ overflowX: "auto", border: `1px solid ${T.line}`, borderRadius: 6 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: T.paper3, textAlign: "left" }}>
+              {["Projeto", "Cliente", "Adjudicado", "Custos", "Margem €", "Margem %"].map((h) => (
+                <th key={h} style={{ padding: "8px 12px", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: T.walnutDark, whiteSpace: "nowrap" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {lucroPorObra.map((o, i) => (
+              <tr key={o.id} style={{ background: i % 2 ? "#fff" : T.paper, borderTop: `1px solid ${T.line}` }}>
+                <td style={{ padding: "8px 12px", fontWeight: 600 }}>{o.projeto}</td>
+                <td style={{ padding: "8px 12px" }}>{o.cliente}</td>
+                <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>{fmtEUR(o.valor)}</td>
+                <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>{fmtEUR(o.custos)}</td>
+                <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, whiteSpace: "nowrap", color: o.margem >= 0 ? T.green : T.rust }}>{fmtEUR(o.margem)}</td>
+                <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap", color: o.margem >= 0 ? T.green : T.rust }}>{o.margemPct.toFixed(1)}%</td>
+              </tr>
+            ))}
+            {lucroPorObra.length === 0 && (
+              <tr><td colSpan={6} style={{ padding: 20, textAlign: "center", opacity: 0.5 }}>Sem obras com valor adjudicado ainda.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <CutDivider label="Despesas gerais da empresa" />
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {despesasGerais.length === 0 && <div style={{ fontSize: 13, opacity: 0.6 }}>Sem despesas gerais registadas.</div>}
+        {despesasGerais.map((d) => (
+          <div key={d.id} style={{
+            display: "grid", gridTemplateColumns: "1.6fr 1fr 0.8fr 0.9fr auto auto", gap: 8, alignItems: "center",
+            padding: "7px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13,
+          }}>
+            <input style={{ ...inputStyle, fontSize: 12 }} value={d.descricao} onChange={(e) => onUpdateDespesa(d.id, { descricao: e.target.value })} />
+            <select style={{ ...selectStyle, fontSize: 12 }} value={d.categoria} onChange={(e) => onUpdateDespesa(d.id, { categoria: e.target.value })}>
+              {CATEGORIAS_DESPESA.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
+            </select>
+            <input type="number" style={{ ...inputStyle, fontSize: 12 }} value={d.valor ?? ""} onChange={(e) => onUpdateDespesa(d.id, { valor: e.target.value === "" ? null : Number(e.target.value) })} />
+            <input type="date" style={{ ...inputStyle, fontSize: 12 }} value={d.data || ""} onChange={(e) => onUpdateDespesa(d.id, { data: e.target.value })} />
+            <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, opacity: 0.75 }}>
+              <input type="checkbox" checked={!!d.recorrente} onChange={(e) => onUpdateDespesa(d.id, { recorrente: e.target.checked })} /> Mensal
+            </label>
+            <button onClick={() => onDeleteDespesa(d.id)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={13} /></button>
+          </div>
+        ))}
+        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 0.8fr 0.9fr auto auto", gap: 8, marginTop: 4 }}>
+          <input style={inputStyle} placeholder="ex: Renda do armazém" value={novaDespesa.descricao} onChange={(e) => setNovaDespesa((s) => ({ ...s, descricao: e.target.value }))} />
+          <select style={selectStyle} value={novaDespesa.categoria} onChange={(e) => setNovaDespesa((s) => ({ ...s, categoria: e.target.value }))}>
+            {CATEGORIAS_DESPESA.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
+          </select>
+          <input type="number" style={inputStyle} placeholder="€" value={novaDespesa.valor} onChange={(e) => setNovaDespesa((s) => ({ ...s, valor: e.target.value }))} />
+          <input type="date" style={inputStyle} value={novaDespesa.data} onChange={(e) => setNovaDespesa((s) => ({ ...s, data: e.target.value }))} />
+          <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, opacity: 0.75 }}>
+            <input type="checkbox" checked={novaDespesa.recorrente} onChange={(e) => setNovaDespesa((s) => ({ ...s, recorrente: e.target.checked }))} /> Mensal
+          </label>
+          <Btn small icon={Plus} onClick={addDespesaGeral}>Add</Btn>
+        </div>
+        <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 4 }}>
+          Marca "Mensal" só como lembrete visual para despesas recorrentes (renda, salários…) — ainda tens de lançar cada mês à mão.
+        </div>
       </div>
 
       <CutDivider label="Pagamentos pendentes" />
@@ -1365,7 +1629,7 @@ function Financeiro({ obras }) {
       </div>
 
       <div style={{ fontSize: 12, opacity: 0.55, marginTop: 18, fontStyle: "italic" }}>
-        Nota: os valores só aparecem aqui depois de preenchidos na ficha de cada obra (Valor orçamentado / Valor adjudicado). O histórico de emails importado não continha valores monetários.
+        Nota: os valores só aparecem aqui depois de preenchidos na ficha de cada obra (Valor orçamentado / Valor adjudicado / Custos).
       </div>
     </div>
   );
@@ -1639,6 +1903,7 @@ const TABS = [
 export default function App() {
   const { obras, loading, saveState, addObra, updateObra, changeEstado, addHistorico, deleteObra } = useObrasStore();
   const { fornecedores, addFornecedor, updateFornecedor, deleteFornecedor } = useFornecedoresStore();
+  const { despesas, addDespesa, updateDespesa, deleteDespesa } = useDespesasStore();
   const [tab, setTab] = useState("painel");
   const [selectedId, setSelectedId] = useState(null);
   const [novaObraOpen, setNovaObraOpen] = useState(false);
@@ -1709,13 +1974,13 @@ export default function App() {
         {tab === "painel" && <Painel obras={obras} onOpen={setSelectedId} />}
         {tab === "pipeline" && <Pipeline obras={obras} onOpen={setSelectedId} onChangeEstado={changeEstado} />}
         {tab === "obras" && <ObrasTab obras={obras} onOpen={setSelectedId} onNew={() => setNovaObraOpen(true)} />}
-        {tab === "financeiro" && <Financeiro obras={obras} />}
+        {tab === "financeiro" && <Financeiro obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} />}
         {tab === "clientes" && <Clientes obras={obras} onFilterClient={() => setTab("obras")} />}
         {tab === "fornecedores" && <Fornecedores fornecedores={fornecedores} onAdd={addFornecedor} onUpdate={updateFornecedor} onDelete={deleteFornecedor} />}
       </div>
 
       {selected && (
-        <ObraModal obra={selected} onClose={() => setSelectedId(null)} onUpdate={updateObra} onChangeEstado={changeEstado} onAddHistorico={addHistorico} onDelete={deleteObra} fornecedorNomes={fornecedores.map((f) => f.nome)} />
+        <ObraModal obra={selected} onClose={() => setSelectedId(null)} onUpdate={updateObra} onChangeEstado={changeEstado} onAddHistorico={addHistorico} onDelete={deleteObra} fornecedorNomes={fornecedores.map((f) => f.nome)} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} />
       )}
       {novaObraOpen && (
         <NovaObraModal suggestedRef={nextRef(obras)} onClose={() => setNovaObraOpen(false)} onCreate={addObra} />
