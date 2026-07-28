@@ -40,17 +40,24 @@ const STAGES = [
   { key: "orcamentar", label: "A Orçamentar", color: T.navy },
   { key: "entregue", label: "Orçamento Entregue", color: T.amber },
   { key: "retificacao", label: "Retificação", color: "#8A6A1E" },
+  { key: "em_estudo", label: "Em Estudo pelo Cliente", color: "#5C6B8A" },
   { key: "aceite", label: "Orçamento Aceite", color: "#6B7F3E" },
   { key: "adjudicado", label: "Adjudicado", color: T.green },
   { key: "producao", label: "Em Produção", color: T.walnut },
   { key: "concluido", label: "Concluído", color: "#3D4F44" },
-  { key: "rejeitado", label: "Rejeitado", color: T.rust },
+  { key: "rejeitado_nos", label: "Rejeitado por Nós", color: "#8A7A6B" },
+  { key: "rejeitado_cliente", label: "Rejeitado pelo Cliente", color: T.rust },
 ];
 const stageOf = (key) => STAGES.find((s) => s.key === key) || STAGES[0];
 // "Aceite" = o cliente disse que sim, mas ainda não há dinheiro entrado.
-// Só passa a "Adjudicado" quando a 1ª tranche é marcada como paga.
-const ACTIVE_KEYS = ["orcamentar", "entregue", "retificacao", "aceite"];
+// Só passa a "Adjudicado" quando o 1º pagamento é marcado como pago.
+const ACTIVE_KEYS = ["orcamentar", "entregue", "retificacao", "em_estudo"];
 const WON_KEYS = ["adjudicado", "producao", "concluido"];
+// Uma obra só conta como "perdida" (para a taxa de conversão) se for o
+// CLIENTE a rejeitar. Se rejeitarmos nós (fora da nossa área, sem
+// capacidade, etc.), não é uma venda perdida — é uma escolha nossa.
+const REJECTED_KEYS = ["rejeitado_nos", "rejeitado_cliente"];
+const LOST_KEYS = ["rejeitado_cliente"];
 // Fases a partir das quais já faz sentido montar o plano de pagamentos
 const COM_PAGAMENTOS_KEYS = ["aceite", "adjudicado", "producao", "concluido"];
 
@@ -177,6 +184,8 @@ const seedRow = (o, idx) => ({
   tipoCliente: o.tipoCliente || "",
   clienteEmail: o.clienteEmail || "",
   clienteTelefone: o.clienteTelefone || "",
+  clienteNif: o.clienteNif || "",
+  clienteMorada: o.clienteMorada || "",
   donoObra: o.donoObra || "",
   donoObraContacto: o.donoObraContacto || "",
   cotacoes: [],
@@ -211,20 +220,20 @@ const SEED_DATA = [
   { cliente: "André Azevedo (Kozowood)", projeto: "Murtinheira, Figueira da Foz", descricao: "Carpintaria e montagem", canal: "mariocarvalho@carpinova.pt", dataEntrada: "2026-07-06", estado: "entregue", notas: "Entregue 22/07.", dataEntrega: "2026-07-22" },
   { cliente: "Miguel Guimarães — Estradas do Douro (CED)", projeto: "Quinta da Gateira, Souselo, Cinfães", descricao: "+ portas de segurança", canal: "mariocarvalho@carpinova.pt", dataEntrada: null, estado: "entregue" },
   { cliente: "Luís Brandão (ERN)", projeto: "Trindade Domus, Porto", descricao: "", canal: "geral@carpinova", dataEntrada: "2026-07-16", estado: "entregue", notas: "Entregue 22/07/2026.", dataEntrega: "2026-07-22" },
-  { cliente: "Luís Graça", projeto: "Toldotempo", descricao: "Portas", canal: "mariocarvalho@carpinova.pt", dataEntrada: "2026-06-16", estado: "rejeitado", motivoRejeicao: "Não aceitaram." },
-  { cliente: "Alca Design Studio", projeto: "Edifício de Apartamentos Turísticos, Rua da Madalena", descricao: "", canal: "geral@carpinova.pt", dataEntrada: "2026-06-17", estado: "rejeitado" },
-  { cliente: "Alca Design Studio", projeto: "Restaurante Senna, Lisboa", descricao: "Carpintarias", canal: "geral@carpinova.pt", dataEntrada: "2026-06-17", estado: "rejeitado" },
-  { cliente: "Tiago Carneiro — Estradas do Douro (CED)", projeto: "Condomínio Salvador Cardoso", descricao: "", canal: "mariocarvalho@carpinova.pt", dataEntrada: "2026-06-19", estado: "rejeitado", motivoRejeicao: "Rejeitado por nós.", proximaAcaoTexto: "Retomar contacto em 2027" },
-  { cliente: "Paula Pinheiro (Omatapalo)", projeto: "Hotel Flag, S. João da Madeira", descricao: "Carpintarias", canal: "geral@carpinova.pt", dataEntrada: "2026-06-22", estado: "rejeitado" },
-  { cliente: "Alca Design Studio", projeto: "Moradia de Luxo, Urb. Arcaya, Vilamoura", descricao: "", canal: "geral@carpinova.pt", dataEntrada: "2026-06-23", estado: "rejeitado" },
-  { cliente: "André Neves", projeto: "Labial Farma", descricao: "Vidro fosco + reparar porta", canal: "geral@carpinova.pt", dataEntrada: "2026-06-25", estado: "rejeitado", motivoRejeicao: "Fora do nosso raio de atuação — informar por email." },
-  { cliente: "Alca Design Studio", projeto: "Apartamento Bruno", descricao: "Portas interiores, armários e cozinha", canal: "mariocarvalho@carpinova.pt", dataEntrada: "2026-07-03", estado: "rejeitado" },
-  { cliente: "Alca Design Studio", projeto: "Escritório, Edifício Oficinas Europa", descricao: "Carpintaria", canal: "geral@carpinova.pt", dataEntrada: "2026-07-03", estado: "rejeitado" },
-  { cliente: "Alca Design Studio", projeto: "Moradia Caxias", descricao: "Carpintarias, entrega e montagem", canal: "geral@carpinova.pt", dataEntrada: "2026-07-15", estado: "rejeitado" },
-  { cliente: "P1 Compras", projeto: "Alfredo Abreu — vinílico", descricao: "Vinil Pumice 3200", canal: "geral@carpinova", dataEntrada: "2026-07-16", estado: "rejeitado", motivoRejeicao: "Não fazemos vinil colado — responder com portfólio e dar contacto alternativo." },
-  { cliente: "Vicente Gouveia", projeto: "Empreitada", descricao: "", canal: "mariocarvalho", dataEntrada: "2026-07-16", estado: "rejeitado", motivoRejeicao: "Rejeitado por nós." },
-  { cliente: "Ricardo Oliveira", projeto: "Aveleda", descricao: "Madeiras", canal: "geral", dataEntrada: "2026-07-20", estado: "rejeitado" },
-  { cliente: "Alca Design Studio", projeto: "Hotel D. Pedro, Lisboa", descricao: "Carpintarias, remodelação WC", canal: "geral", dataEntrada: "2026-07-20", estado: "rejeitado" },
+  { cliente: "Luís Graça", projeto: "Toldotempo", descricao: "Portas", canal: "mariocarvalho@carpinova.pt", dataEntrada: "2026-06-16", estado: "rejeitado_cliente", motivoRejeicao: "Não aceitaram." },
+  { cliente: "Alca Design Studio", projeto: "Edifício de Apartamentos Turísticos, Rua da Madalena", descricao: "", canal: "geral@carpinova.pt", dataEntrada: "2026-06-17", estado: "rejeitado_cliente" },
+  { cliente: "Alca Design Studio", projeto: "Restaurante Senna, Lisboa", descricao: "Carpintarias", canal: "geral@carpinova.pt", dataEntrada: "2026-06-17", estado: "rejeitado_cliente" },
+  { cliente: "Tiago Carneiro — Estradas do Douro (CED)", projeto: "Condomínio Salvador Cardoso", descricao: "", canal: "mariocarvalho@carpinova.pt", dataEntrada: "2026-06-19", estado: "rejeitado_nos", motivoRejeicao: "Rejeitado por nós.", proximaAcaoTexto: "Retomar contacto em 2027" },
+  { cliente: "Paula Pinheiro (Omatapalo)", projeto: "Hotel Flag, S. João da Madeira", descricao: "Carpintarias", canal: "geral@carpinova.pt", dataEntrada: "2026-06-22", estado: "rejeitado_cliente" },
+  { cliente: "Alca Design Studio", projeto: "Moradia de Luxo, Urb. Arcaya, Vilamoura", descricao: "", canal: "geral@carpinova.pt", dataEntrada: "2026-06-23", estado: "rejeitado_cliente" },
+  { cliente: "André Neves", projeto: "Labial Farma", descricao: "Vidro fosco + reparar porta", canal: "geral@carpinova.pt", dataEntrada: "2026-06-25", estado: "rejeitado_nos", motivoRejeicao: "Fora do nosso raio de atuação — informar por email." },
+  { cliente: "Alca Design Studio", projeto: "Apartamento Bruno", descricao: "Portas interiores, armários e cozinha", canal: "mariocarvalho@carpinova.pt", dataEntrada: "2026-07-03", estado: "rejeitado_cliente" },
+  { cliente: "Alca Design Studio", projeto: "Escritório, Edifício Oficinas Europa", descricao: "Carpintaria", canal: "geral@carpinova.pt", dataEntrada: "2026-07-03", estado: "rejeitado_cliente" },
+  { cliente: "Alca Design Studio", projeto: "Moradia Caxias", descricao: "Carpintarias, entrega e montagem", canal: "geral@carpinova.pt", dataEntrada: "2026-07-15", estado: "rejeitado_cliente" },
+  { cliente: "P1 Compras", projeto: "Alfredo Abreu — vinílico", descricao: "Vinil Pumice 3200", canal: "geral@carpinova", dataEntrada: "2026-07-16", estado: "rejeitado_nos", motivoRejeicao: "Não fazemos vinil colado — responder com portfólio e dar contacto alternativo." },
+  { cliente: "Vicente Gouveia", projeto: "Empreitada", descricao: "", canal: "mariocarvalho", dataEntrada: "2026-07-16", estado: "rejeitado_nos", motivoRejeicao: "Rejeitado por nós." },
+  { cliente: "Ricardo Oliveira", projeto: "Aveleda", descricao: "Madeiras", canal: "geral", dataEntrada: "2026-07-20", estado: "rejeitado_cliente" },
+  { cliente: "Alca Design Studio", projeto: "Hotel D. Pedro, Lisboa", descricao: "Carpintarias, remodelação WC", canal: "geral", dataEntrada: "2026-07-20", estado: "rejeitado_cliente" },
   { cliente: "Ferracuti", projeto: "T5 Matosinhos", descricao: "Carpintaria", canal: "geral@carpinova.pt", dataEntrada: "2026-07-07", estado: "retificacao" },
   { cliente: "Pedro Ferreira", projeto: "Baltor — Editora Barcelos", descricao: "", canal: "mariocarvalho@carpinova.pt", dataEntrada: "2026-06-08", estado: "retificacao", notas: "Enviei cotação Gosimat 24/07.", proximaAcaoTexto: "Retomar em setembro" },
   { cliente: "—", projeto: "3 Portas", descricao: "Favo de abelha — Desirk", canal: "—", dataEntrada: "2026-07-14", estado: "retificacao" },
@@ -245,7 +254,7 @@ const fmtDate = (d) => {
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const isOverdue = (dateStr, estado) => {
   if (!dateStr) return false;
-  if (["concluido", "rejeitado"].includes(estado)) return false;
+  if (["concluido", ...REJECTED_KEYS].includes(estado)) return false;
   return dateStr < todayISO();
 };
 const monthLabel = (isoMonth) => {
@@ -360,7 +369,7 @@ function useObrasStore() {
       valorOrcamento: null, valorAdjudicado: null, margem: null,
       dataEntrega: null, dataAdjudicacao: null, dataInicioObra: null, dataConclusao: null,
       proximaAcaoTexto: "", proximaAcaoData: null, motivoRejeicao: "",
-      tipoCliente: "", clienteEmail: "", clienteTelefone: "", donoObra: "", donoObraContacto: "",
+      tipoCliente: "", clienteEmail: "", clienteTelefone: "", clienteNif: "", clienteMorada: "", donoObra: "", donoObraContacto: "",
       cotacoes: [], anexos: [], pagamentos: [], historico: [{ data: todayISO(), texto: "Obra criada." }],
       ...partial,
     };
@@ -566,6 +575,95 @@ function useDespesasStore() {
 }
 
 /* ============================================================
+   CLIENTES STORE — ficha de contacto por cliente (nome, NIF, morada,
+   email, telefone). Sincronizada automaticamente a partir dos campos
+   de contacto preenchidos em cada obra (ver syncCliente no App).
+   ============================================================ */
+const normalizaNome = (s) => (s || "").trim().toLowerCase();
+
+function useClientesStore() {
+  const [clientes, setClientes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const cRef = useRef([]);
+  cRef.current = clientes;
+
+  useEffect(() => {
+    let channel;
+    let cancelled = false;
+
+    (async () => {
+      const { data, error } = await supabase.from("clientes").select("id, payload").order("updated_at", { ascending: true });
+      if (cancelled) return;
+      if (error) {
+        console.error("Erro a carregar clientes:", error);
+        setLoading(false);
+        return;
+      }
+      setClientes((data || []).map((r) => ({ ...r.payload, id: r.id })));
+      setLoading(false);
+
+      channel = supabase
+        .channel("clientes-realtime")
+        .on("postgres_changes", { event: "*", schema: "public", table: "clientes" }, (msg) => {
+          setClientes((cur) => {
+            if (msg.eventType === "DELETE") return cur.filter((c) => c.id !== msg.old.id);
+            const incoming = { ...msg.new.payload, id: msg.new.id };
+            const existe = cur.some((c) => c.id === incoming.id);
+            return existe ? cur.map((c) => (c.id === incoming.id ? incoming : c)) : [...cur, incoming];
+          });
+        })
+        .subscribe();
+    })();
+
+    return () => { cancelled = true; if (channel) supabase.removeChannel(channel); };
+  }, []);
+
+  const persistRow = useCallback(async (id, payload) => {
+    const { error } = await supabase.from("clientes").upsert({ id, payload, updated_at: new Date().toISOString() }, { onConflict: "id" });
+    if (error) console.error("Erro a gravar cliente:", error);
+  }, []);
+
+  const addCliente = useCallback((partial) => {
+    const id = uid();
+    const novo = { id, nome: "", nif: "", morada: "", email: "", telefone: "", notas: "", ...partial };
+    setClientes((cur) => [...cur, novo]);
+    persistRow(id, novo);
+    return id;
+  }, [persistRow]);
+
+  const updateCliente = useCallback((id, patch) => {
+    const next = cRef.current.map((c) => (c.id === id ? { ...c, ...patch } : c));
+    setClientes(next);
+    const atualizado = next.find((c) => c.id === id);
+    if (atualizado) persistRow(id, atualizado);
+  }, [persistRow]);
+
+  const deleteCliente = useCallback((id) => {
+    setClientes((cur) => cur.filter((c) => c.id !== id));
+    supabase.from("clientes").delete().eq("id", id).then(({ error }) => {
+      if (error) console.error("Erro a eliminar cliente:", error);
+    });
+  }, []);
+
+  // Chamado a partir da ficha da obra sempre que o nome/email/telefone/NIF/
+  // morada do cliente é editado — cria ou atualiza a ficha correspondente,
+  // sem nunca apagar dados já preenchidos (só substitui campos não vazios).
+  const syncCliente = useCallback((nome, contactoPatch) => {
+    if (!nome || !nome.trim()) return;
+    const chave = normalizaNome(nome);
+    const limpo = Object.fromEntries(Object.entries(contactoPatch || {}).filter(([, v]) => v && String(v).trim() !== ""));
+    const existente = cRef.current.find((c) => normalizaNome(c.nome) === chave);
+    if (existente) {
+      if (Object.keys(limpo).length > 0) updateCliente(existente.id, limpo);
+    } else {
+      addCliente({ nome: nome.trim(), ...limpo });
+    }
+  }, [addCliente, updateCliente]);
+
+  return { clientes, loading, addCliente, updateCliente, deleteCliente, syncCliente };
+}
+
+/* ============================================================
    PEQUENOS COMPONENTES
    ============================================================ */
 function Tag({ children, color }) {
@@ -658,7 +756,7 @@ function Btn({ children, onClick, variant = "primary", icon: Icon, small, type =
 /* ============================================================
    MODAL — DETALHE DA OBRA
    ============================================================ */
-function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, onDelete, fornecedorNomes, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespesa }) {
+function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, onDelete, fornecedorNomes, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespesa, onSyncCliente }) {
   const [local, setLocal] = useState(obra);
   const [novaNota, setNovaNota] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -668,6 +766,17 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
 
   const set = (patch) => setLocal((l) => ({ ...l, ...patch }));
   const commit = (patch) => { set(patch); onUpdate(obra.id, patch); };
+
+  // Sempre que o nome, email, telefone, NIF ou morada do cliente mudam,
+  // atualiza (ou cria) a ficha desse cliente automaticamente.
+  const commitClienteContacto = (patch) => {
+    commit(patch);
+    const atual = { ...local, ...patch };
+    onSyncCliente(atual.cliente, {
+      email: atual.clienteEmail, telefone: atual.clienteTelefone,
+      nif: atual.clienteNif, morada: atual.clienteMorada,
+    });
+  };
 
   const handleEstadoChange = (novoEstado) => {
     set({ estado: novoEstado });
@@ -791,7 +900,7 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
       return { ...p, pago, data: pago && !p.data ? todayISO() : p.data };
     });
     commit({ pagamentos });
-    // Regra de negócio: só é "Adjudicado" quando entra a 1ª tranche (adjudicação).
+    // Regra de negócio: só é "Adjudicado" quando entra o 1º pagamento (adjudicação).
     if (idx === 0 && pagamentos[0].pago && local.estado === "aceite") {
       set({ estado: "adjudicado" });
       onChangeEstado(obra.id, "adjudicado");
@@ -860,7 +969,7 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
           {/* Dados principais */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <Field label="Cliente">
-              <input style={inputStyle} value={local.cliente} onChange={(e) => set({ cliente: e.target.value })} onBlur={() => commit({ cliente: local.cliente })} />
+              <input style={inputStyle} value={local.cliente} onChange={(e) => set({ cliente: e.target.value })} onBlur={() => commitClienteContacto({ cliente: local.cliente })} />
             </Field>
             <Field label="Projeto / Obra">
               <input style={inputStyle} value={local.projeto} onChange={(e) => set({ projeto: e.target.value })} onBlur={() => commit({ projeto: local.projeto })} />
@@ -885,10 +994,16 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
               </select>
             </Field>
             <Field label="Email do cliente">
-              <input style={inputStyle} value={local.clienteEmail || ""} onChange={(e) => set({ clienteEmail: e.target.value })} onBlur={() => commit({ clienteEmail: local.clienteEmail })} />
+              <input style={inputStyle} value={local.clienteEmail || ""} onChange={(e) => set({ clienteEmail: e.target.value })} onBlur={() => commitClienteContacto({ clienteEmail: local.clienteEmail })} />
             </Field>
             <Field label="Telefone do cliente">
-              <input style={inputStyle} value={local.clienteTelefone || ""} onChange={(e) => set({ clienteTelefone: e.target.value })} onBlur={() => commit({ clienteTelefone: local.clienteTelefone })} />
+              <input style={inputStyle} value={local.clienteTelefone || ""} onChange={(e) => set({ clienteTelefone: e.target.value })} onBlur={() => commitClienteContacto({ clienteTelefone: local.clienteTelefone })} />
+            </Field>
+            <Field label="NIF do cliente">
+              <input style={inputStyle} value={local.clienteNif || ""} onChange={(e) => set({ clienteNif: e.target.value })} onBlur={() => commitClienteContacto({ clienteNif: local.clienteNif })} />
+            </Field>
+            <Field label="Morada do cliente">
+              <input style={inputStyle} value={local.clienteMorada || ""} onChange={(e) => set({ clienteMorada: e.target.value })} onBlur={() => commitClienteContacto({ clienteMorada: local.clienteMorada })} />
             </Field>
             <Field label="Dono de obra (se diferente do cliente)">
               <input style={inputStyle} placeholder="ex: dono final, quando cliente é arquiteto/empreiteiro" value={local.donoObra || ""} onChange={(e) => set({ donoObra: e.target.value })} onBlur={() => commit({ donoObra: local.donoObra })} />
@@ -922,7 +1037,7 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
             </Field>
           </div>
 
-          {local.estado === "rejeitado" && (
+          {REJECTED_KEYS.includes(local.estado) && (
             <Field label="Motivo da rejeição">
               <textarea style={textareaStyle} rows={2} value={local.motivoRejeicao || ""} onChange={(e) => set({ motivoRejeicao: e.target.value })} onBlur={() => commit({ motivoRejeicao: local.motivoRejeicao })} />
             </Field>
@@ -1221,7 +1336,7 @@ function Painel({ obras, onOpen }) {
     const emPipeline = obras.filter((o) => ACTIVE_KEYS.includes(o.estado));
     const valorPipeline = emPipeline.reduce((s, o) => s + (Number(o.valorOrcamento) || 0), 0);
     const adjudicadas = obras.filter((o) => WON_KEYS.includes(o.estado));
-    const rejeitadas = obras.filter((o) => o.estado === "rejeitado");
+    const rejeitadas = obras.filter((o) => LOST_KEYS.includes(o.estado));
     const taxaConversao = (adjudicadas.length + rejeitadas.length) > 0
       ? Math.round((adjudicadas.length / (adjudicadas.length + rejeitadas.length)) * 100) : 0;
     const emProducao = obras.filter((o) => o.estado === "producao").length;
@@ -1231,7 +1346,7 @@ function Painel({ obras, onOpen }) {
 
   const acoesPendentes = useMemo(() => {
     return obras
-      .filter((o) => o.proximaAcaoData && !["concluido", "rejeitado"].includes(o.estado))
+      .filter((o) => o.proximaAcaoData && !["concluido", ...REJECTED_KEYS].includes(o.estado))
       .sort((a, b) => (a.proximaAcaoData || "").localeCompare(b.proximaAcaoData || ""))
       .slice(0, 8);
   }, [obras]);
@@ -1538,7 +1653,8 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
     const wonAno = won.filter((o) => (o.dataAdjudicacao || o.dataInicioObra || o.dataEntrada || "").startsWith(ano));
     const valorAno = wonAno.reduce((s, o) => s + (Number(o.valorAdjudicado) || 0), 0);
     const pipeline = obras.filter((o) => ACTIVE_KEYS.includes(o.estado)).reduce((s, o) => s + (Number(o.valorOrcamento) || 0), 0);
-    const rejeitadoValor = obras.filter((o) => o.estado === "rejeitado").reduce((s, o) => s + (Number(o.valorOrcamento) || 0), 0);
+    const rejeitadoValor = obras.filter((o) => LOST_KEYS.includes(o.estado)).reduce((s, o) => s + (Number(o.valorOrcamento) || 0), 0);
+    const recusadoPorNosValor = obras.filter((o) => o.estado === "rejeitado_nos").reduce((s, o) => s + (Number(o.valorOrcamento) || 0), 0);
 
     let pendente = 0, recebido = 0;
     won.forEach((o) => (o.pagamentos || []).forEach((p) => { if (p.pago) recebido += p.valor; else pendente += p.valor; }));
@@ -1548,7 +1664,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
     const custosTotaisAno = totalCustosObrasAno + totalDespesasGeraisAno;
     const lucroLiquido = valorAno - custosTotaisAno;
 
-    return { valorAno, pipeline, rejeitadoValor, pendente, recebido, totalCustosObrasAno, totalDespesasGeraisAno, custosTotaisAno, lucroLiquido };
+    return { valorAno, pipeline, rejeitadoValor, recusadoPorNosValor, pendente, recebido, totalCustosObrasAno, totalDespesasGeraisAno, custosTotaisAno, lucroLiquido };
   }, [obras, ano, custosObrasAno, despesasGeraisAno]);
 
   const pagamentosPendentes = useMemo(() => {
@@ -1599,8 +1715,9 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
         <KpiCard icon={Wallet} label={`Despesas ${ano}`} value={fmtEUR(totais.custosTotaisAno)} sub="Custos de obra + gerais" accent={T.rust} />
         <KpiCard icon={TrendingUp} label={`Lucro líquido ${ano}`} value={fmtEUR(totais.lucroLiquido)} sub={totais.lucroLiquido >= 0 ? "Positivo" : "Negativo"} accent={totais.lucroLiquido >= 0 ? T.green : T.rust} />
         <KpiCard icon={Package} label="Valor em pipeline" value={fmtEUR(totais.pipeline)} sub="Ainda por decidir" />
-        <KpiCard icon={Clock} label="Por receber" value={fmtEUR(totais.pendente)} sub="Tranches pendentes" accent={T.amber} />
-        <KpiCard icon={XCircle} label="Perdido (orçamentado)" value={fmtEUR(totais.rejeitadoValor)} sub="Obras rejeitadas" accent={T.rust} />
+        <KpiCard icon={Clock} label="Por receber" value={fmtEUR(totais.pendente)} sub="Pagamentos pendentes" accent={T.amber} />
+        <KpiCard icon={XCircle} label="Perdido (rejeitado pelo cliente)" value={fmtEUR(totais.rejeitadoValor)} sub="Conta para a taxa de conversão" accent={T.rust} />
+        <KpiCard icon={XCircle} label="Recusado por nós" value={fmtEUR(totais.recusadoPorNosValor)} sub="Não é venda perdida" />
       </div>
 
       <CutDivider label={`Receita vs. Despesas por mês — ${ano}`} />
@@ -1685,7 +1802,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
 
       <CutDivider label="Pagamentos pendentes" />
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {pagamentosPendentes.length === 0 && <div style={{ fontSize: 13, opacity: 0.6 }}>Sem tranches pendentes registadas.</div>}
+        {pagamentosPendentes.length === 0 && <div style={{ fontSize: 13, opacity: 0.6 }}>Sem pagamentos pendentes registados.</div>}
         {pagamentosPendentes.map((p, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13 }}>
             <Clock size={14} color={T.amber} />
@@ -1708,34 +1825,138 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
 /* ============================================================
    CLIENTES
    ============================================================ */
-function Clientes({ obras, onFilterClient }) {
+/* ============================================================
+   MODAL — FICHA DE CLIENTE
+   ============================================================ */
+function ClienteModal({ cliente, onClose, onAdd, onUpdate, onDelete }) {
+  const [id, setId] = useState(cliente.id || null);
+  const [local, setLocal] = useState(cliente);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  useEffect(() => { setId(cliente.id || null); setLocal(cliente); }, [cliente]);
+
+  const set = (patch) => setLocal((l) => ({ ...l, ...patch }));
+  const commit = (patch) => {
+    set(patch);
+    if (id) {
+      onUpdate(id, patch);
+    } else {
+      const novoId = onAdd({ nome: local.nome, ...patch });
+      setId(novoId);
+    }
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(36,31,26,0.55)", zIndex: 100,
+      display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "4vh 16px", overflowY: "auto",
+    }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: T.paper, borderRadius: 8, width: "100%", maxWidth: 520,
+        border: `1px solid ${T.line}`, boxShadow: "0 20px 50px rgba(0,0,0,0.3)", overflowX: "hidden",
+      }}>
+        <div style={{ padding: "18px 24px", borderBottom: `2px dashed ${T.line}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div style={{ fontFamily: "'Roboto Slab', serif", fontSize: 20, fontWeight: 700, color: T.ink }}>{local.nome || "Novo cliente"}</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: T.ink, opacity: 0.6 }}><X size={20} /></button>
+        </div>
+
+        <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
+          <Field label="Nome">
+            <input style={inputStyle} value={local.nome} onChange={(e) => set({ nome: e.target.value })} onBlur={() => commit({ nome: local.nome })} />
+          </Field>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Field label="Email">
+              <input type="email" style={inputStyle} value={local.email || ""} onChange={(e) => set({ email: e.target.value })} onBlur={() => commit({ email: local.email })} />
+            </Field>
+            <Field label="Telefone">
+              <input style={inputStyle} value={local.telefone || ""} onChange={(e) => set({ telefone: e.target.value })} onBlur={() => commit({ telefone: local.telefone })} />
+            </Field>
+            <Field label="NIF">
+              <input style={inputStyle} value={local.nif || ""} onChange={(e) => set({ nif: e.target.value })} onBlur={() => commit({ nif: local.nif })} />
+            </Field>
+            <Field label="Morada">
+              <input style={inputStyle} value={local.morada || ""} onChange={(e) => set({ morada: e.target.value })} onBlur={() => commit({ morada: local.morada })} />
+            </Field>
+          </div>
+          <Field label="Notas">
+            <textarea style={textareaStyle} rows={2} value={local.notas || ""} onChange={(e) => set({ notas: e.target.value })} onBlur={() => commit({ notas: local.notas })} />
+          </Field>
+          <div style={{ fontSize: 11.5, opacity: 0.55 }}>
+            Email, telefone, NIF e morada também se atualizam sozinhos quando os preenches na ficha de uma obra deste cliente.
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 10, borderTop: `1px solid ${T.line}` }}>
+            {id && (confirmDelete ? (
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 12, color: T.rust }}>Eliminar esta ficha?</span>
+                <Btn small variant="danger" onClick={() => { onDelete(id); onClose(); }}>Sim, eliminar</Btn>
+                <Btn small variant="ghost" onClick={() => setConfirmDelete(false)}>Cancelar</Btn>
+              </div>
+            ) : (
+              <Btn small variant="danger" icon={Trash2} onClick={() => setConfirmDelete(true)}>Eliminar</Btn>
+            ))}
+            {!id && <span />}
+            <Btn onClick={onClose}>Fechar</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   CLIENTES — fichas reais (nome, NIF, morada, contacto), cruzadas
+   com estatísticas calculadas a partir das obras
+   ============================================================ */
+function Clientes({ obras, clientes, onAddCliente, onUpdateCliente, onDeleteCliente }) {
   const [q, setQ] = useState("");
+  const [selectedKey, setSelectedKey] = useState(null);
+
   const lista = useMemo(() => {
     const map = {};
     obras.forEach((o) => {
       const nome = (o.cliente || "—").trim();
-      if (!map[nome]) map[nome] = { nome, total: 0, ganhas: 0, rejeitadas: 0, emCurso: 0, valorAdjudicado: 0, ultimo: null };
-      const e = map[nome];
+      const chave = normalizaNome(nome);
+      if (!map[chave]) map[chave] = { chave, nome, total: 0, ganhas: 0, rejeitadas: 0, emCurso: 0, valorAdjudicado: 0, ultimo: null };
+      const e = map[chave];
       e.total += 1;
       if (WON_KEYS.includes(o.estado)) { e.ganhas += 1; e.valorAdjudicado += Number(o.valorAdjudicado) || 0; }
-      if (o.estado === "rejeitado") e.rejeitadas += 1;
+      if (LOST_KEYS.includes(o.estado)) e.rejeitadas += 1;
       if (ACTIVE_KEYS.includes(o.estado)) e.emCurso += 1;
       if (!e.ultimo || (o.dataEntrada || "") > e.ultimo) e.ultimo = o.dataEntrada;
     });
-    return Object.values(map)
+    // Junta as fichas de cliente que ainda não têm nenhuma obra associada
+    clientes.forEach((c) => {
+      const chave = normalizaNome(c.nome);
+      if (!map[chave]) map[chave] = { chave, nome: c.nome, total: 0, ganhas: 0, rejeitadas: 0, emCurso: 0, valorAdjudicado: 0, ultimo: null };
+    });
+    return Object.values(map).map((e) => {
+      const ficha = clientes.find((c) => normalizaNome(c.nome) === e.chave);
+      return { ...e, nome: ficha?.nome || e.nome, ficha };
+    })
       .filter((c) => !q || c.nome.toLowerCase().includes(q.toLowerCase()))
       .sort((a, b) => b.total - a.total);
-  }, [obras, q]);
+  }, [obras, clientes, q]);
+
+  const selected = lista.find((c) => c.chave === selectedKey);
+
+  const criarNovo = () => {
+    const id = onAddCliente({ nome: "Novo cliente" });
+    setSelectedKey(normalizaNome("Novo cliente"));
+  };
 
   return (
     <div>
-      <div style={{ position: "relative", marginBottom: 16, maxWidth: 320 }}>
-        <Search size={14} style={{ position: "absolute", left: 9, top: 9, opacity: 0.5 }} />
-        <input style={{ ...inputStyle, width: "100%", paddingLeft: 28 }} placeholder="Pesquisar cliente…" value={q} onChange={(e) => setQ(e.target.value)} />
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ position: "relative", flex: "1 1 260px" }}>
+          <Search size={14} style={{ position: "absolute", left: 9, top: 9, opacity: 0.5 }} />
+          <input style={{ ...inputStyle, width: "100%", paddingLeft: 28 }} placeholder="Pesquisar cliente…" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <Btn small icon={Plus} onClick={criarNovo}>Novo cliente</Btn>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12 }}>
         {lista.map((c) => (
-          <div key={c.nome} onClick={() => onFilterClient(c.nome)} style={{
+          <div key={c.chave} onClick={() => setSelectedKey(c.chave)} style={{
             background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6, padding: "14px 16px", cursor: "pointer",
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
@@ -1750,10 +1971,27 @@ function Clientes({ obras, onFilterClient }) {
             {c.valorAdjudicado > 0 && (
               <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, fontWeight: 700, color: T.walnutDark }}>{fmtEUR(c.valorAdjudicado)}</div>
             )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11.5, opacity: 0.7, marginTop: 6 }}>
+              {c.ficha?.telefone && <div style={{ display: "flex", alignItems: "center", gap: 5 }}><Phone size={11} /> {c.ficha.telefone}</div>}
+              {c.ficha?.email && <div style={{ display: "flex", alignItems: "center", gap: 5 }}><Mail size={11} /> {c.ficha.email}</div>}
+              {c.ficha?.nif && <div>NIF: {c.ficha.nif}</div>}
+              {!c.ficha && <div style={{ fontStyle: "italic", opacity: 0.6 }}>Sem ficha — clica para preencher</div>}
+            </div>
             <div style={{ fontSize: 11, opacity: 0.5, marginTop: 6 }}>Último contacto: {fmtDate(c.ultimo)}</div>
           </div>
         ))}
       </div>
+      {lista.length === 0 && <div style={{ opacity: 0.5, fontSize: 13 }}>Sem resultados.</div>}
+
+      {selected && (
+        <ClienteModal
+          cliente={selected.ficha || { nome: selected.nome }}
+          onClose={() => setSelectedKey(null)}
+          onAdd={onAddCliente}
+          onUpdate={onUpdateCliente}
+          onDelete={onDeleteCliente}
+        />
+      )}
     </div>
   );
 }
@@ -1974,6 +2212,7 @@ export default function App() {
   const { obras, loading, saveState, addObra, updateObra, changeEstado, addHistorico, deleteObra } = useObrasStore();
   const { fornecedores, addFornecedor, updateFornecedor, deleteFornecedor } = useFornecedoresStore();
   const { despesas, addDespesa, updateDespesa, deleteDespesa } = useDespesasStore();
+  const { clientes, addCliente, updateCliente, deleteCliente, syncCliente } = useClientesStore();
   const [tab, setTab] = useState("painel");
   const [selectedId, setSelectedId] = useState(null);
   const [novaObraOpen, setNovaObraOpen] = useState(false);
@@ -2046,12 +2285,12 @@ export default function App() {
         {tab === "pipeline" && <Pipeline obras={obras} onOpen={setSelectedId} onChangeEstado={changeEstado} />}
         {tab === "obras" && <ObrasTab obras={obras} onOpen={setSelectedId} onNew={() => setNovaObraOpen(true)} />}
         {tab === "financeiro" && <Financeiro obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} />}
-        {tab === "clientes" && <Clientes obras={obras} onFilterClient={() => setTab("obras")} />}
+        {tab === "clientes" && <Clientes obras={obras} clientes={clientes} onAddCliente={addCliente} onUpdateCliente={updateCliente} onDeleteCliente={deleteCliente} />}
         {tab === "fornecedores" && <Fornecedores fornecedores={fornecedores} onAdd={addFornecedor} onUpdate={updateFornecedor} onDelete={deleteFornecedor} />}
       </div>
 
       {selected && (
-        <ObraModal obra={selected} onClose={() => setSelectedId(null)} onUpdate={updateObra} onChangeEstado={changeEstado} onAddHistorico={addHistorico} onDelete={deleteObra} fornecedorNomes={fornecedores.map((f) => f.nome)} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} />
+        <ObraModal obra={selected} onClose={() => setSelectedId(null)} onUpdate={updateObra} onChangeEstado={changeEstado} onAddHistorico={addHistorico} onDelete={deleteObra} fornecedorNomes={fornecedores.map((f) => f.nome)} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onSyncCliente={syncCliente} />
       )}
       {novaObraOpen && (
         <NovaObraModal suggestedRef={nextRef(obras)} onClose={() => setNovaObraOpen(false)} onCreate={addObra} />
