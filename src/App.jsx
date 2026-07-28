@@ -777,21 +777,47 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
     if (!local.valorAdjudicado) return;
     const v = Number(local.valorAdjudicado);
     const pagamentos = [
-      { label: "Adjudicação (40%)", valor: +(v * 0.4).toFixed(2), pago: false },
-      { label: "Início de obra (40%)", valor: +(v * 0.4).toFixed(2), pago: false },
-      { label: "Conclusão (20%)", valor: +(v * 0.2).toFixed(2), pago: false },
+      { label: "Adjudicação (40%)", valor: +(v * 0.4).toFixed(2), data: "", pago: false },
+      { label: "Início de obra (40%)", valor: +(v * 0.4).toFixed(2), data: "", pago: false },
+      { label: "Conclusão (20%)", valor: +(v * 0.2).toFixed(2), data: "", pago: false },
     ];
     commit({ pagamentos });
   };
 
   const togglePagamento = (idx) => {
-    const pagamentos = local.pagamentos.map((p, i) => i === idx ? { ...p, pago: !p.pago } : p);
+    const pagamentos = local.pagamentos.map((p, i) => {
+      if (i !== idx) return p;
+      const pago = !p.pago;
+      return { ...p, pago, data: pago && !p.data ? todayISO() : p.data };
+    });
     commit({ pagamentos });
     // Regra de negócio: só é "Adjudicado" quando entra a 1ª tranche (adjudicação).
     if (idx === 0 && pagamentos[0].pago && local.estado === "aceite") {
       set({ estado: "adjudicado" });
       onChangeEstado(obra.id, "adjudicado");
     }
+  };
+
+  const updatePagamento = (idx, patch) => {
+    const pagamentos = local.pagamentos.map((p, i) => (i === idx ? { ...p, ...patch } : p));
+    commit({ pagamentos });
+  };
+
+  const removePagamento = (idx) => {
+    const pagamentos = local.pagamentos.filter((_, i) => i !== idx);
+    commit({ pagamentos });
+  };
+
+  const [novoPagamento, setNovoPagamento] = useState({ label: "", valor: "", data: "" });
+  const addPagamentoManual = () => {
+    if (!novoPagamento.label.trim()) return;
+    const pagamentos = [...(local.pagamentos || []), {
+      label: novoPagamento.label.trim(),
+      valor: novoPagamento.valor === "" ? null : Number(novoPagamento.valor),
+      data: novoPagamento.data || "", pago: false,
+    }];
+    commit({ pagamentos });
+    setNovoPagamento({ label: "", valor: "", data: "" });
   };
 
   const stage = stageOf(local.estado);
@@ -903,15 +929,12 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
           )}
 
           <CutDivider label="Valores" />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <Field label="Valor orçamentado (ex-IVA)">
               <input type="number" style={inputStyle} value={local.valorOrcamento ?? ""} onChange={(e) => set({ valorOrcamento: e.target.value === "" ? null : e.target.value })} onBlur={() => commit({ valorOrcamento: local.valorOrcamento })} />
             </Field>
             <Field label="Valor adjudicado (ex-IVA)">
               <input type="number" style={inputStyle} value={local.valorAdjudicado ?? ""} onChange={(e) => set({ valorAdjudicado: e.target.value === "" ? null : e.target.value })} onBlur={() => commit({ valorAdjudicado: local.valorAdjudicado })} />
-            </Field>
-            <Field label="Margem aplicada (%)">
-              <input type="number" style={inputStyle} value={local.margem ?? ""} onChange={(e) => set({ margem: e.target.value === "" ? null : e.target.value })} onBlur={() => commit({ margem: local.margem })} />
             </Field>
           </div>
 
@@ -980,21 +1003,36 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
               {local.pagamentos && local.pagamentos.length > 0 ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {local.pagamentos.map((p, i) => (
-                    <label key={i} style={{
-                      display: "flex", alignItems: "center", gap: 10, padding: "8px 10px",
+                    <div key={i} style={{
+                      display: "grid", gridTemplateColumns: "auto minmax(0,1.4fr) minmax(0,0.8fr) minmax(0,0.9fr) auto",
+                      gap: 8, alignItems: "center", padding: "7px 10px",
                       background: p.pago ? "rgba(73,107,60,0.12)" : T.paper2, borderRadius: 4,
-                      border: `1px solid ${T.line}`, cursor: "pointer", fontSize: 13,
+                      border: `1px solid ${T.line}`, fontSize: 13,
                     }}>
-                      <input type="checkbox" checked={!!p.pago} onChange={() => togglePagamento(i)} />
-                      <span style={{ flex: 1 }}>{p.label}</span>
-                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{fmtEUR(p.valor)}</span>
-                      {p.pago && <CheckCircle2 size={15} color={T.green} />}
-                    </label>
+                      <input type="checkbox" checked={!!p.pago} onChange={() => togglePagamento(i)} title="Pago" />
+                      <input style={{ ...inputStyle, fontSize: 12 }} value={p.label} onChange={(e) => updatePagamento(i, { label: e.target.value })} />
+                      <input type="number" style={{ ...inputStyle, fontSize: 12 }} value={p.valor ?? ""} placeholder="€"
+                        onChange={(e) => updatePagamento(i, { valor: e.target.value === "" ? null : Number(e.target.value) })} />
+                      <input type="date" style={{ ...inputStyle, fontSize: 12 }} value={p.data || ""} onChange={(e) => updatePagamento(i, { data: e.target.value })} />
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        {p.pago && <CheckCircle2 size={15} color={T.green} />}
+                        <button onClick={() => removePagamento(i)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust, padding: 2 }}><Trash2 size={13} /></button>
+                      </div>
+                    </div>
                   ))}
                 </div>
               ) : (
-                <div style={{ fontSize: 12, opacity: 0.6 }}>Sem valor adjudicado definido ou plano ainda não gerado.</div>
+                <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 6 }}>Sem valor adjudicado definido ou plano ainda não gerado.</div>
               )}
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.4fr) minmax(0,0.8fr) minmax(0,0.9fr) auto", gap: 8, marginTop: 6 }}>
+                <input style={inputStyle} placeholder="ex: 2ª prestação" value={novoPagamento.label} onChange={(e) => setNovoPagamento((s) => ({ ...s, label: e.target.value }))} />
+                <input type="number" style={inputStyle} placeholder="€" value={novoPagamento.valor} onChange={(e) => setNovoPagamento((s) => ({ ...s, valor: e.target.value }))} />
+                <input type="date" style={inputStyle} value={novoPagamento.data} onChange={(e) => setNovoPagamento((s) => ({ ...s, data: e.target.value }))} />
+                <Btn small icon={Plus} onClick={addPagamentoManual}>Add</Btn>
+              </div>
+              <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 4 }}>
+                A data pode ser a prevista (ainda não pago) ou a data em que recebeste — fica preenchida automaticamente com hoje quando marcas como pago, mas podes sempre corrigir.
+              </div>
             </div>
           )}
 
@@ -1653,6 +1691,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
             <Clock size={14} color={T.amber} />
             <span style={{ fontWeight: 600 }}>{p.projeto}</span>
             <span style={{ opacity: 0.6 }}>— {p.cliente}</span>
+            {p.data && <span style={{ fontSize: 11.5, opacity: 0.6 }}>{fmtDate(p.data)}</span>}
             <span style={{ marginLeft: "auto", fontFamily: "'JetBrains Mono', monospace" }}>{p.label}</span>
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: T.walnutDark }}>{fmtEUR(p.valor)}</span>
           </div>
