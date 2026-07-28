@@ -4,7 +4,8 @@ import {
   Plus, Search, X, Mail, Phone, Calendar, AlertTriangle, TrendingUp,
   Package, CheckCircle2, XCircle, Clock, Download, Building2, ChevronDown,
   ChevronRight, ChevronUp, MapPin, Euro, FileText, Users, LayoutGrid, Table as TableIcon,
-  Wallet, Wrench, ArrowRight, Trash2, Save, RotateCcw, Globe
+  Wallet, Wrench, ArrowRight, Trash2, Save, RotateCcw, Globe, Upload, Paperclip,
+  FileSpreadsheet, Image as ImageIcon, FileType
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -39,14 +40,19 @@ const STAGES = [
   { key: "orcamentar", label: "A Orçamentar", color: T.navy },
   { key: "entregue", label: "Orçamento Entregue", color: T.amber },
   { key: "retificacao", label: "Retificação", color: "#8A6A1E" },
+  { key: "aceite", label: "Orçamento Aceite", color: "#6B7F3E" },
   { key: "adjudicado", label: "Adjudicado", color: T.green },
   { key: "producao", label: "Em Produção", color: T.walnut },
   { key: "concluido", label: "Concluído", color: "#3D4F44" },
   { key: "rejeitado", label: "Rejeitado", color: T.rust },
 ];
 const stageOf = (key) => STAGES.find((s) => s.key === key) || STAGES[0];
-const ACTIVE_KEYS = ["orcamentar", "entregue", "retificacao"];
+// "Aceite" = o cliente disse que sim, mas ainda não há dinheiro entrado.
+// Só passa a "Adjudicado" quando a 1ª tranche é marcada como paga.
+const ACTIVE_KEYS = ["orcamentar", "entregue", "retificacao", "aceite"];
 const WON_KEYS = ["adjudicado", "producao", "concluido"];
+// Fases a partir das quais já faz sentido montar o plano de pagamentos
+const COM_PAGAMENTOS_KEYS = ["aceite", "adjudicado", "producao", "concluido"];
 
 /* Tabela de margens (Secção 4 do perfil) — liga o tipo de cliente à margem sugerida */
 const CLIENTE_TIPOS = [
@@ -168,6 +174,7 @@ const seedRow = (o, idx) => ({
   donoObra: o.donoObra || "",
   donoObraContacto: o.donoObraContacto || "",
   cotacoes: [],
+  anexos: [],
   pagamentos: [],
   historico: [
     { data: o.dataEntrada || new Date().toISOString().slice(0, 10), texto: o.notas || "Importado do histórico de emails." },
@@ -183,12 +190,12 @@ const SEED_DATA = [
   { cliente: "Enark", projeto: "2519 Barcelos", descricao: "Mesa, nicho, garrafeira, móvel TV e aparador", canal: "mariocarvalho@carpinova.pt", dataEntrada: "2026-07-14", estado: "orcamentar", notas: "Mandei cotação Olivia para as pedras." },
   { cliente: "Kozowood", projeto: "Santo Tirso — Cláudia Rodrigues", descricao: "", canal: "mariocarvalho@carpinova.pt", dataEntrada: "2026-07-17", estado: "orcamentar", notas: "Mandei cotação Desirk portas." },
   { cliente: "Horácio Costa", projeto: "2 Armários MDF", descricao: "", canal: "geral", dataEntrada: "2026-07-21", estado: "producao", notas: "Só fabrico e entrega." },
-  { cliente: "Samuel Bezerra", projeto: "Pizarro", descricao: "Módulos de cozinha e bandas", canal: "mariocarvalho@carpinova.pt", dataEntrada: "2026-06-11", estado: "adjudicado", notas: "Pedido Ferreira Martins módulos de cozinha e bandas. Atraso para depois do meio de julho.", dataInicioObra: "2026-07-27", proximaAcaoTexto: "Obra" },
-  { cliente: "Dr.ª Inês", projeto: "Casa Oliveira, São Mateus", descricao: "Cozinha + roupeiros + WC", canal: "mariocarvalho@carpinova.pt", dataEntrada: "2026-06-23", estado: "adjudicado", notas: "Aceite o chão; resto só para o final do ano." },
-  { cliente: "Nuno", projeto: "Roupeiro", descricao: "", canal: "—", dataEntrada: "2026-07-01", estado: "adjudicado", notas: "Enviado pedido Ferreira Martins." },
-  { cliente: "Ferracuti", projeto: "Móvel de Sala", descricao: "Cliente: Renata — 992 € + IVA", canal: "whatsapp", dataEntrada: "2026-07-07", estado: "adjudicado" },
-  { cliente: "Diana", projeto: "Arranjo de Cozinha", descricao: "", canal: "—", dataEntrada: null, estado: "adjudicado" },
-  { cliente: "Elp Any Trade — Fernanda", projeto: "IMT Bragança", descricao: "", canal: "—", dataEntrada: "2026-07-20", estado: "adjudicado", proximaAcaoTexto: "Sem início de obra definido" },
+  { cliente: "Samuel Bezerra", projeto: "Pizarro", descricao: "Módulos de cozinha e bandas", canal: "mariocarvalho@carpinova.pt", dataEntrada: "2026-06-11", estado: "aceite", notas: "Pedido Ferreira Martins módulos de cozinha e bandas. Atraso para depois do meio de julho.", dataInicioObra: "2026-07-27", proximaAcaoTexto: "Obra" },
+  { cliente: "Dr.ª Inês", projeto: "Casa Oliveira, São Mateus", descricao: "Cozinha + roupeiros + WC", canal: "mariocarvalho@carpinova.pt", dataEntrada: "2026-06-23", estado: "aceite", notas: "Aceite o chão; resto só para o final do ano." },
+  { cliente: "Nuno", projeto: "Roupeiro", descricao: "", canal: "—", dataEntrada: "2026-07-01", estado: "aceite", notas: "Enviado pedido Ferreira Martins." },
+  { cliente: "Ferracuti", projeto: "Móvel de Sala", descricao: "Cliente: Renata — 992 € + IVA", canal: "whatsapp", dataEntrada: "2026-07-07", estado: "aceite" },
+  { cliente: "Diana", projeto: "Arranjo de Cozinha", descricao: "", canal: "—", dataEntrada: null, estado: "aceite" },
+  { cliente: "Elp Any Trade — Fernanda", projeto: "IMT Bragança", descricao: "", canal: "—", dataEntrada: "2026-07-20", estado: "aceite", proximaAcaoTexto: "Sem início de obra definido" },
   { cliente: "Elp Any Trade — Fernanda", projeto: "Centro Acolhimento Migrantes, Celeirós", descricao: "Portas", canal: "mariocarvalho@carpinova.pt", dataEntrada: "2026-07-17", estado: "entregue", notas: "Entregue 24/07.", dataEntrega: "2026-07-24" },
   { cliente: "Ana Machado", projeto: "Porta — reaproveitamento aro", descricao: "Não cabe por 2cm", canal: "geral@carpinova", dataEntrada: "2026-07-17", estado: "entregue", notas: "Barcelos." },
   { cliente: "Elp Any Trade — Fernanda Moreira", projeto: "USF de S. Tomé de Negrelos", descricao: "Mobiliário", canal: "mariocarvalho@carpinova.pt", dataEntrada: "2026-05-21", estado: "entregue", notas: "Entregue 07/07.", dataEntrega: "2026-07-07" },
@@ -348,7 +355,7 @@ function useObrasStore() {
       dataEntrega: null, dataAdjudicacao: null, dataInicioObra: null, dataConclusao: null,
       proximaAcaoTexto: "", proximaAcaoData: null, motivoRejeicao: "",
       tipoCliente: "", clienteEmail: "", clienteTelefone: "", donoObra: "", donoObraContacto: "",
-      cotacoes: [], pagamentos: [], historico: [{ data: todayISO(), texto: "Obra criada." }],
+      cotacoes: [], anexos: [], pagamentos: [], historico: [{ data: todayISO(), texto: "Obra criada." }],
       ...partial,
     };
     setObras((cur) => [novaObra, ...cur]);
@@ -607,6 +614,57 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
     commit({ cotacoes });
   };
 
+  const [uploading, setUploading] = useState(false);
+  const [uploadErro, setUploadErro] = useState("");
+  const fileInputRef = useRef(null);
+
+  const handleFileUpload = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    setUploading(true);
+    setUploadErro("");
+    const novosAnexos = [];
+    for (const file of files) {
+      const path = `${obra.id}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      const { error } = await supabase.storage.from("anexos").upload(path, file);
+      if (error) {
+        console.error("Erro a enviar ficheiro:", error);
+        setUploadErro(`Falhou "${file.name}": ${error.message}`);
+        continue;
+      }
+      const { data: pub } = supabase.storage.from("anexos").getPublicUrl(path);
+      novosAnexos.push({
+        id: uid(), nome: file.name, path, url: pub.publicUrl,
+        tipo: file.type || "", tamanho: file.size, dataUpload: todayISO(),
+      });
+    }
+    if (novosAnexos.length) commit({ anexos: [...(local.anexos || []), ...novosAnexos] });
+    setUploading(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const removeAnexo = async (anexo) => {
+    const anexos = (local.anexos || []).filter((a) => a.id !== anexo.id);
+    commit({ anexos });
+    const { error } = await supabase.storage.from("anexos").remove([anexo.path]);
+    if (error) console.error("Erro a remover ficheiro do storage:", error);
+  };
+
+  const iconeAnexo = (a) => {
+    const ext = (a.nome.split(".").pop() || "").toLowerCase();
+    if (["xlsx", "xls", "csv"].includes(ext)) return <FileSpreadsheet size={16} color={T.green} />;
+    if (ext === "pdf") return <FileType size={16} color={T.rust} />;
+    if (["png", "jpg", "jpeg", "webp", "gif"].includes(ext)) return <ImageIcon size={16} color={T.navy} />;
+    return <Paperclip size={16} color={T.walnut} />;
+  };
+
+  const formatBytes = (n) => {
+    if (!n) return "";
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
   const gerarPagamentos = () => {
     if (!local.valorAdjudicado) return;
     const v = Number(local.valorAdjudicado);
@@ -621,6 +679,11 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
   const togglePagamento = (idx) => {
     const pagamentos = local.pagamentos.map((p, i) => i === idx ? { ...p, pago: !p.pago } : p);
     commit({ pagamentos });
+    // Regra de negócio: só é "Adjudicado" quando entra a 1ª tranche (adjudicação).
+    if (idx === 0 && pagamentos[0].pago && local.estado === "aceite") {
+      set({ estado: "adjudicado" });
+      onChangeEstado(obra.id, "adjudicado");
+    }
   };
 
   const stage = stageOf(local.estado);
@@ -744,7 +807,7 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
             </Field>
           </div>
 
-          {WON_KEYS.includes(local.estado) && (
+          {COM_PAGAMENTOS_KEYS.includes(local.estado) && (
             <div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: T.walnutDark, textTransform: "uppercase", letterSpacing: 0.4 }}>Plano de pagamentos</span>
@@ -809,6 +872,34 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
             <datalist id="fornecedores-datalist">
               {fornecedorNomesList.map((n) => <option key={n} value={n} />)}
             </datalist>
+          </div>
+
+          <CutDivider label="Anexos (faturas, PDFs, Excel, fotos…)" />
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {(local.anexos || []).length === 0 && (
+              <div style={{ fontSize: 12, opacity: 0.55 }}>Sem ficheiros anexados a esta obra.</div>
+            )}
+            {(local.anexos || []).map((a) => (
+              <div key={a.id} style={{
+                display: "flex", alignItems: "center", gap: 8, padding: "7px 10px",
+                background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13,
+              }}>
+                {iconeAnexo(a)}
+                <a href={a.url} target="_blank" rel="noreferrer" style={{ flex: 1, color: T.ink, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {a.nome}
+                </a>
+                <span style={{ fontSize: 11, opacity: 0.5, whiteSpace: "nowrap" }}>{formatBytes(a.tamanho)}</span>
+                <span style={{ fontSize: 11, opacity: 0.5, whiteSpace: "nowrap" }}>{fmtDate(a.dataUpload)}</span>
+                <button onClick={() => removeAnexo(a)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={13} /></button>
+              </div>
+            ))}
+            <div>
+              <input ref={fileInputRef} type="file" multiple accept=".pdf,.xlsx,.xls,.csv,.doc,.docx,image/*" style={{ display: "none" }} onChange={handleFileUpload} />
+              <Btn small variant="ghost" icon={Upload} disabled={uploading} onClick={() => fileInputRef.current && fileInputRef.current.click()}>
+                {uploading ? "A enviar…" : "Anexar ficheiro"}
+              </Btn>
+              {uploadErro && <div style={{ fontSize: 11.5, color: T.rust, marginTop: 6 }}>{uploadErro}</div>}
+            </div>
           </div>
 
           <CutDivider label="Próxima ação" />
@@ -993,18 +1084,18 @@ function Pipeline({ obras, onOpen, onChangeEstado }) {
   };
 
   return (
-    <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 12 }}>
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(${STAGES.length}, minmax(0, 1fr))`, gap: 8, paddingBottom: 14 }}>
       {STAGES.map((stage) => {
         const items = obras.filter((o) => o.estado === stage.key);
         const isOver = overStage === stage.key;
         return (
-          <div key={stage.key} style={{ minWidth: 250, flex: "0 0 250px" }}>
+          <div key={stage.key} style={{ minWidth: 0 }}>
             <div style={{
-              display: "flex", alignItems: "center", justifyContent: "space-between",
-              padding: "8px 10px", background: stage.color, borderRadius: "5px 5px 0 0",
+              display: "flex", flexDirection: "column", gap: 2,
+              padding: "7px 8px", background: stage.color, borderRadius: "5px 5px 0 0",
             }}>
-              <span style={{ color: "#fff", fontWeight: 700, fontSize: 12, textTransform: "uppercase", letterSpacing: 0.4 }}>{stage.label}</span>
-              <span style={{ color: "#fff", fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>{items.length}</span>
+              <span style={{ color: "#fff", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.2, lineHeight: 1.25, wordBreak: "break-word" }}>{stage.label}</span>
+              <span style={{ color: "rgba(255,255,255,0.85)", fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}>{items.length}</span>
             </div>
             <div
               onDragOver={(e) => { e.preventDefault(); if (overStage !== stage.key) setOverStage(stage.key); }}
@@ -1013,8 +1104,8 @@ function Pipeline({ obras, onOpen, onChangeEstado }) {
               style={{
                 background: isOver ? "rgba(94,58,34,0.10)" : T.paper2,
                 border: `1px solid ${isOver ? T.walnut : T.line}`,
-                borderTop: "none", borderRadius: "0 0 5px 5px", padding: 8, minHeight: 240,
-                display: "flex", flexDirection: "column", gap: 8,
+                borderTop: "none", borderRadius: "0 0 5px 5px", padding: 6, minHeight: 240,
+                display: "flex", flexDirection: "column", gap: 6,
                 transition: "background .12s, border-color .12s",
               }}
             >
@@ -1030,8 +1121,8 @@ function Pipeline({ obras, onOpen, onChangeEstado }) {
                     onDragEnd={() => { setDraggingId(null); setOverStage(null); }}
                     onClick={() => onOpen(o.id)}
                     style={{
-                      background: "#fff", border: `1px solid ${T.line}`, borderRadius: 5, padding: "9px 10px",
-                      cursor: "grab", position: "relative",
+                      background: "#fff", border: `1px solid ${T.line}`, borderRadius: 5, padding: "8px 9px",
+                      cursor: "grab", position: "relative", minWidth: 0,
                       opacity: isDragging ? 0.35 : 1,
                       transform: isDragging ? "scale(0.97)" : "scale(1)",
                       boxShadow: isDragging ? "none" : "0 1px 2px rgba(0,0,0,0.04)",
@@ -1039,20 +1130,25 @@ function Pipeline({ obras, onOpen, onChangeEstado }) {
                     }}
                   >
                     <div style={{ position: "absolute", top: 6, right: 6, width: 8, height: 8, borderRadius: "50%", background: T.paper2, border: `1px solid ${T.line}` }} />
-                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, opacity: 0.55 }}>{o.ref || "s/ ref"}</div>
-                    <div style={{ fontWeight: 700, fontSize: 13, color: T.ink, marginTop: 2 }}>{o.projeto}</div>
-                    <div style={{ fontSize: 12, opacity: 0.65, marginTop: 1 }}>{o.cliente}</div>
+                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9.5, opacity: 0.55 }}>{o.ref || "s/ ref"}</div>
+                    <div style={{ fontWeight: 700, fontSize: 12.5, color: T.ink, marginTop: 2, wordBreak: "break-word" }}>{o.projeto}</div>
+                    <div style={{ fontSize: 11.5, opacity: 0.65, marginTop: 1, wordBreak: "break-word" }}>{o.cliente}</div>
                     {o.donoObra && o.donoObra !== o.cliente && (
-                      <div style={{ fontSize: 11, opacity: 0.55, marginTop: 1, fontStyle: "italic" }}>Dono de obra: {o.donoObra}</div>
+                      <div style={{ fontSize: 10.5, opacity: 0.55, marginTop: 1, fontStyle: "italic", wordBreak: "break-word" }}>Dono: {o.donoObra}</div>
                     )}
                     {(o.valorOrcamento || o.valorAdjudicado) && (
-                      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 600, marginTop: 6, color: T.walnutDark }}>
+                      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, fontWeight: 600, marginTop: 6, color: T.walnutDark }}>
                         {fmtEUR(o.valorAdjudicado || o.valorOrcamento)}
                       </div>
                     )}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, gap: 6 }}>
                       <span style={{ fontSize: 11, opacity: 0.55 }}>{fmtDate(o.dataEntrada)}</span>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        {(o.anexos || []).length > 0 && (
+                          <span title="Anexos" style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 11, color: T.walnut }}>
+                            <Paperclip size={12} /> {o.anexos.length}
+                          </span>
+                        )}
                         {cotacoesPendentes > 0 && (
                           <span title="Cotações por receber" style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 11, color: T.navy }}>
                             <FileText size={12} /> {cotacoesPendentes}
@@ -1609,7 +1705,7 @@ export default function App() {
       </div>
 
       {/* Content */}
-      <div style={{ padding: "24px", maxWidth: 1200, margin: "0 auto" }}>
+      <div style={{ padding: "24px", maxWidth: tab === "pipeline" ? "none" : 1200, margin: "0 auto" }}>
         {tab === "painel" && <Painel obras={obras} onOpen={setSelectedId} />}
         {tab === "pipeline" && <Pipeline obras={obras} onOpen={setSelectedId} onChangeEstado={changeEstado} />}
         {tab === "obras" && <ObrasTab obras={obras} onOpen={setSelectedId} onNew={() => setNovaObraOpen(true)} />}
