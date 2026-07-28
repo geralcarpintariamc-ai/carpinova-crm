@@ -1638,8 +1638,16 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
   const [novaDespesa, setNovaDespesa] = useState({ descricao: "", categoria: CATEGORIAS_DESPESA[0], valor: "", data: todayISO(), recorrente: false });
 
   const despesasGerais = useMemo(() => despesas.filter((d) => !d.obraId), [despesas]);
-  const despesasGeraisAno = useMemo(() => despesasGerais.filter((d) => (d.data || "").startsWith(ano)), [despesasGerais, ano]);
-  const custosObrasAno = useMemo(() => despesas.filter((d) => d.obraId && (d.data || "").startsWith(ano)), [despesas, ano]);
+
+  // Uma despesa "Mensal" aplica-se a partir do mês em que foi lançada e
+  // continua todos os meses seguintes — não é preciso lançá-la todo mês
+  // à mão. Uma despesa não-mensal só conta no seu próprio mês.
+  const despesaValorNoMes = (d, mesKey) => {
+    if (!d.data || d.valor == null) return 0;
+    const mesInicio = d.data.slice(0, 7);
+    if (d.recorrente) return mesKey >= mesInicio ? Number(d.valor) || 0 : 0;
+    return mesInicio === mesKey ? Number(d.valor) || 0 : 0;
+  };
 
   const custosPorObra = useMemo(() => {
     const map = {};
@@ -1647,22 +1655,36 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
     return map;
   }, [despesas]);
 
+  const mesesDoAno = useMemo(() => Array.from({ length: 12 }, (_, i) => `${ano}-${String(i + 1).padStart(2, "0")}`), [ano]);
+
   const dadosMensais = useMemo(() => {
-    const meses = {};
-    for (let m = 1; m <= 12; m++) meses[`${ano}-${String(m).padStart(2, "0")}`] = { receita: 0, despesa: 0 };
-    obras.filter((o) => WON_KEYS.includes(o.estado)).forEach((o) => {
-      const d = o.dataAdjudicacao || o.dataInicioObra || o.dataEntrada;
-      if (!d || !d.startsWith(ano)) return;
-      const key = d.slice(0, 7);
-      if (meses[key]) meses[key].receita += Number(o.valorAdjudicado) || 0;
+    const despesasObra = despesas.filter((d) => d.obraId);
+    return mesesDoAno.map((mesKey) => {
+      const receita = obras.filter((o) => WON_KEYS.includes(o.estado)).reduce((s, o) => {
+        const d = o.dataAdjudicacao || o.dataInicioObra || o.dataEntrada;
+        return d && d.slice(0, 7) === mesKey ? s + (Number(o.valorAdjudicado) || 0) : s;
+      }, 0);
+      const despesaGeral = despesasGerais.reduce((s, d) => s + despesaValorNoMes(d, mesKey), 0);
+      const despesaObra = despesasObra.reduce((s, d) => s + despesaValorNoMes(d, mesKey), 0);
+      return { mes: monthLabel(mesKey), receita, despesa: despesaGeral + despesaObra, despesaGeral, despesaObra };
     });
+  }, [obras, despesas, despesasGerais, mesesDoAno]);
+
+  const despesasPorCategoria = useMemo(() => {
+    const map = {};
     despesas.forEach((d) => {
-      if (!d.data || !d.data.startsWith(ano)) return;
-      const key = d.data.slice(0, 7);
-      if (meses[key]) meses[key].despesa += Number(d.valor) || 0;
+      const total = mesesDoAno.reduce((s, mesKey) => s + despesaValorNoMes(d, mesKey), 0);
+      if (total > 0) map[d.categoria] = (map[d.categoria] || 0) + total;
     });
-    return Object.entries(meses).map(([k, v]) => ({ mes: monthLabel(k), receita: v.receita, despesa: v.despesa }));
-  }, [obras, despesas, ano]);
+    return Object.entries(map).map(([categoria, valor]) => ({ categoria, valor })).sort((a, b) => b.valor - a.valor);
+  }, [despesas, mesesDoAno]);
+
+  const CATEGORIA_CORES = [T.walnut, T.amber, T.navy, T.green, T.rust, "#8A6A1E", "#5C6B8A", "#6B7F3E", "#3D4F44"];
+
+  const custosFixosMensais = useMemo(
+    () => despesasGerais.filter((d) => d.recorrente).reduce((s, d) => s + (Number(d.valor) || 0), 0),
+    [despesasGerais]
+  );
 
   const totais = useMemo(() => {
     const won = obras.filter((o) => WON_KEYS.includes(o.estado));
@@ -1675,13 +1697,14 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
     let pendente = 0, recebido = 0;
     won.forEach((o) => (o.pagamentos || []).forEach((p) => { if (p.pago) recebido += p.valor; else pendente += p.valor; }));
 
-    const totalCustosObrasAno = custosObrasAno.reduce((s, d) => s + (Number(d.valor) || 0), 0);
-    const totalDespesasGeraisAno = despesasGeraisAno.reduce((s, d) => s + (Number(d.valor) || 0), 0);
-    const custosTotaisAno = totalCustosObrasAno + totalDespesasGeraisAno;
+    const totalDespesasGeraisAno = dadosMensais.reduce((s, m) => s + m.despesaGeral, 0);
+    const totalCustosObrasAno = dadosMensais.reduce((s, m) => s + m.despesaObra, 0);
+    const custosTotaisAno = totalDespesasGeraisAno + totalCustosObrasAno;
     const lucroLiquido = valorAno - custosTotaisAno;
+    const margemLiquidaPct = valorAno > 0 ? (lucroLiquido / valorAno) * 100 : null;
 
-    return { valorAno, pipeline, rejeitadoValor, recusadoPorNosValor, pendente, recebido, totalCustosObrasAno, totalDespesasGeraisAno, custosTotaisAno, lucroLiquido };
-  }, [obras, ano, custosObrasAno, despesasGeraisAno]);
+    return { valorAno, pipeline, rejeitadoValor, recusadoPorNosValor, pendente, recebido, totalCustosObrasAno, totalDespesasGeraisAno, custosTotaisAno, lucroLiquido, margemLiquidaPct };
+  }, [obras, ano, dadosMensais]);
 
   const pagamentosPendentes = useMemo(() => {
     const list = [];
@@ -1730,10 +1753,16 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
         <KpiCard icon={Euro} label={`Adjudicado ${ano}`} value={fmtEUR(totais.valorAno)} accent={T.green} />
         <KpiCard icon={Wallet} label={`Despesas ${ano}`} value={fmtEUR(totais.custosTotaisAno)} sub="Custos de obra + gerais" accent={T.rust} />
         <KpiCard icon={TrendingUp} label={`Lucro líquido ${ano}`} value={fmtEUR(totais.lucroLiquido)} sub={totais.lucroLiquido >= 0 ? "Positivo" : "Negativo"} accent={totais.lucroLiquido >= 0 ? T.green : T.rust} />
+        <KpiCard icon={TrendingUp} label="Margem líquida" value={totais.margemLiquidaPct !== null ? `${totais.margemLiquidaPct.toFixed(1)}%` : "—"} sub="Lucro ÷ receita" accent={totais.margemLiquidaPct >= 0 ? T.green : T.rust} />
+        <KpiCard icon={Wallet} label="Custos fixos / mês" value={fmtEUR(custosFixosMensais)} sub="Despesas gerais marcadas 'Mensal'" accent={T.amber} />
         <KpiCard icon={Package} label="Valor em pipeline" value={fmtEUR(totais.pipeline)} sub="Ainda por decidir" />
         <KpiCard icon={Clock} label="Por receber" value={fmtEUR(totais.pendente)} sub="Pagamentos pendentes" accent={T.amber} />
         <KpiCard icon={XCircle} label="Perdido (rejeitado pelo cliente)" value={fmtEUR(totais.rejeitadoValor)} sub="Conta para a taxa de conversão" accent={T.rust} />
         <KpiCard icon={XCircle} label="Recusado por nós" value={fmtEUR(totais.recusadoPorNosValor)} sub="Não é venda perdida" />
+      </div>
+
+      <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 10, fontStyle: "italic" }}>
+        "Custos fixos / mês" soma as despesas gerais marcadas como "Mensal" — não precisas de as lançar todos os meses; contam automaticamente a partir do mês em que as puseste, mês após mês. É o valor mínimo que precisas de faturar só para cobrir os custos fixos, antes de dar lucro.
       </div>
 
       <CutDivider label={`Receita vs. Despesas por mês — ${ano}`} />
@@ -1749,6 +1778,36 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
             <Bar dataKey="despesa" name="Despesas" fill={T.rust} radius={[3, 3, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
+      </div>
+
+      <CutDivider label={`Despesas por categoria — ${ano}`} />
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1.2fr)", gap: 16, alignItems: "center" }}>
+        <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6, padding: "12px", height: 240 }}>
+          {despesasPorCategoria.length > 0 ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={despesasPorCategoria} dataKey="valor" nameKey="categoria" cx="50%" cy="50%" outerRadius={85} label={(e) => `${e.categoria}`}>
+                  {despesasPorCategoria.map((entry, i) => <Cell key={entry.categoria} fill={CATEGORIA_CORES[i % CATEGORIA_CORES.length]} />)}
+                </Pie>
+                <Tooltip formatter={(v) => fmtEUR(v)} contentStyle={{ fontFamily: "Inter", fontSize: 12, borderRadius: 4, border: `1px solid ${T.line}` }} />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", fontSize: 13, opacity: 0.5 }}>Sem despesas registadas para {ano}.</div>
+          )}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {despesasPorCategoria.map((c, i) => (
+            <div key={c.categoria} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+              <span style={{ width: 10, height: 10, borderRadius: "50%", background: CATEGORIA_CORES[i % CATEGORIA_CORES.length], flexShrink: 0 }} />
+              <span style={{ flex: 1 }}>{c.categoria}</span>
+              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: T.walnutDark }}>{fmtEUR(c.valor)}</span>
+              <span style={{ fontSize: 11, opacity: 0.5, minWidth: 40, textAlign: "right" }}>
+                {totais.custosTotaisAno > 0 ? `${((c.valor / totais.custosTotaisAno) * 100).toFixed(0)}%` : ""}
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
 
       <CutDivider label="Lucro por obra" />
