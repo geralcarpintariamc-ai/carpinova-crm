@@ -2133,7 +2133,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
 /* ============================================================
    MODAL — FICHA DE CLIENTE
    ============================================================ */
-function ClienteModal({ cliente, onClose, onAdd, onUpdate, onDelete }) {
+function ClienteModal({ cliente, onClose, onAdd, onUpdate, onDelete, obras, onOpenObra }) {
   const [id, setId] = useState(cliente.id || null);
   const [local, setLocal] = useState(cliente);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -2202,6 +2202,40 @@ function ClienteModal({ cliente, onClose, onAdd, onUpdate, onDelete }) {
             Email, telefone, NIF e morada também se atualizam sozinhos quando os preenches na ficha de uma obra deste cliente.
           </div>
 
+          <CutDivider label={`Obras (${(obras || []).length})`} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 260, overflowY: "auto" }}>
+            {(obras || []).length === 0 && <div style={{ fontSize: 12, opacity: 0.55 }}>Ainda sem obras registadas para este cliente.</div>}
+            {(obras || []).map((o) => {
+              const stage = stageOf(o.estado);
+              return (
+                <div
+                  key={o.id}
+                  onClick={() => { onOpenObra(o.id); onClose(); }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10, padding: "8px 10px",
+                    background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4,
+                    cursor: "pointer", fontSize: 13,
+                  }}
+                  title="Abrir ficha da obra"
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, color: T.navy, textDecoration: "underline", textDecorationStyle: "dotted", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {o.projeto}
+                    </div>
+                    <div style={{ fontSize: 11, opacity: 0.6, fontFamily: "'JetBrains Mono', monospace" }}>{o.ref || "s/ ref"} · {fmtDate(o.dataEntrada)}</div>
+                  </div>
+                  {(o.valorAdjudicado || o.valorOrcamento) && (
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: T.walnutDark, whiteSpace: "nowrap" }}>
+                      {fmtEUR(o.valorAdjudicado || o.valorOrcamento)}
+                    </span>
+                  )}
+                  <Tag color={stage.color}>{stage.label}</Tag>
+                  <ChevronRight size={14} style={{ opacity: 0.4, flexShrink: 0 }} />
+                </div>
+              );
+            })}
+          </div>
+
           <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 10, borderTop: `1px solid ${T.line}` }}>
             {id && (confirmDelete ? (
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -2225,7 +2259,7 @@ function ClienteModal({ cliente, onClose, onAdd, onUpdate, onDelete }) {
    CLIENTES — fichas reais (nome, NIF, morada, contacto), cruzadas
    com estatísticas calculadas a partir das obras
    ============================================================ */
-function Clientes({ obras, clientes, onAddCliente, onUpdateCliente, onDeleteCliente }) {
+function Clientes({ obras, clientes, onAddCliente, onUpdateCliente, onDeleteCliente, onOpenObra }) {
   const [q, setQ] = useState("");
   const [selectedKey, setSelectedKey] = useState(null);
 
@@ -2256,6 +2290,11 @@ function Clientes({ obras, clientes, onAddCliente, onUpdateCliente, onDeleteClie
   }, [obras, clientes, q]);
 
   const selected = lista.find((c) => c.chave === selectedKey);
+  const obrasDoCliente = useMemo(
+    () => (selected ? obras.filter((o) => normalizaNome(o.cliente) === selected.chave)
+      .sort((a, b) => (b.dataEntrada || "").localeCompare(a.dataEntrada || "")) : []),
+    [obras, selected]
+  );
 
   const criarNovo = () => {
     const id = onAddCliente({ nome: "Novo cliente" });
@@ -2304,6 +2343,8 @@ function Clientes({ obras, clientes, onAddCliente, onUpdateCliente, onDeleteClie
         <ClienteModal
           key={selectedKey}
           cliente={selected.ficha || { nome: selected.nome }}
+          obras={obrasDoCliente}
+          onOpenObra={onOpenObra}
           onClose={() => setSelectedKey(null)}
           onAdd={onAddCliente}
           onUpdate={onUpdateCliente}
@@ -2609,7 +2650,7 @@ export default function App() {
         {tab === "pipeline" && <Pipeline obras={obras} onOpen={setSelectedId} onChangeEstado={changeEstado} />}
         {tab === "obras" && <ObrasTab obras={obras} onOpen={setSelectedId} onNew={() => setNovaObraOpen(true)} />}
         {tab === "financeiro" && <Financeiro obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} />}
-        {tab === "clientes" && <Clientes obras={obras} clientes={clientes} onAddCliente={addCliente} onUpdateCliente={updateCliente} onDeleteCliente={deleteCliente} />}
+        {tab === "clientes" && <Clientes obras={obras} clientes={clientes} onAddCliente={addCliente} onUpdateCliente={updateCliente} onDeleteCliente={deleteCliente} onOpenObra={setSelectedId} />}
         {tab === "fornecedores" && <Fornecedores fornecedores={fornecedores} onAdd={addFornecedor} onUpdate={updateFornecedor} onDelete={deleteFornecedor} />}
       </div>
 
