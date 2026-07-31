@@ -796,7 +796,7 @@ function Btn({ children, onClick, variant = "primary", icon: Icon, small, type =
 /* ============================================================
    MODAL — DETALHE DA OBRA
    ============================================================ */
-function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, onDelete, fornecedorNomes, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespesa, onSyncCliente }) {
+function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, onDelete, fornecedorNomes, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespesa, onSyncCliente, clientesNomes }) {
   const [local, setLocal] = useState(obra);
   const [novaNota, setNovaNota] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -1009,7 +1009,10 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
           {/* Dados principais */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <Field label="Cliente">
-              <input style={inputStyle} value={local.cliente} onChange={(e) => set({ cliente: e.target.value })} onBlur={() => commitClienteContacto({ cliente: local.cliente })} />
+              <input style={inputStyle} list="clientes-datalist" value={local.cliente} onChange={(e) => set({ cliente: e.target.value })} onBlur={() => commitClienteContacto({ cliente: local.cliente })} />
+              <datalist id="clientes-datalist">
+                {(clientesNomes || []).map((n) => <option key={n} value={n} />)}
+              </datalist>
             </Field>
             <Field label="Projeto / Obra">
               <input style={inputStyle} value={local.projeto} onChange={(e) => set({ projeto: e.target.value })} onBlur={() => commit({ projeto: local.projeto })} />
@@ -1323,7 +1326,7 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
 /* ============================================================
    MODAL — NOVA OBRA
    ============================================================ */
-function NovaObraModal({ onClose, onCreate, suggestedRef }) {
+function NovaObraModal({ onClose, onCreate, suggestedRef, clientesNomes }) {
   const [f, setF] = useState({
     ref: suggestedRef, cliente: "", projeto: "", descricao: "", canal: "", dataEntrada: todayISO(), estado: "orcamentar",
   });
@@ -1342,7 +1345,10 @@ function NovaObraModal({ onClose, onCreate, suggestedRef }) {
             <input style={inputStyle} value={f.ref} onChange={(e) => set("ref", e.target.value)} />
           </Field>
           <Field label="Cliente *">
-            <input style={inputStyle} value={f.cliente} onChange={(e) => set("cliente", e.target.value)} autoFocus />
+            <input style={inputStyle} list="clientes-datalist-novo" value={f.cliente} onChange={(e) => set("cliente", e.target.value)} autoFocus />
+            <datalist id="clientes-datalist-novo">
+              {(clientesNomes || []).map((n) => <option key={n} value={n} />)}
+            </datalist>
           </Field>
           <Field label="Projeto / Obra *">
             <input style={inputStyle} value={f.projeto} onChange={(e) => set("projeto", e.target.value)} />
@@ -2132,7 +2138,17 @@ function ClienteModal({ cliente, onClose, onAdd, onUpdate, onDelete }) {
   const [local, setLocal] = useState(cliente);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  useEffect(() => { setId(cliente.id || null); setLocal(cliente); }, [cliente]);
+  // Se esta ficha ainda não existe na base de dados (cliente derivado só
+  // das obras, sem registo próprio), cria-a já ao abrir o modal — assim
+  // não há hipótese de duas edições seguidas (antes do primeiro "onAdd"
+  // terminar) criarem cada uma o seu próprio cliente duplicado.
+  useEffect(() => {
+    if (!id && cliente.nome) {
+      const novoId = onAdd({ nome: cliente.nome });
+      setId(novoId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const set = (patch) => setLocal((l) => ({ ...l, ...patch }));
   const commit = (patch) => {
@@ -2140,6 +2156,8 @@ function ClienteModal({ cliente, onClose, onAdd, onUpdate, onDelete }) {
     if (id) {
       onUpdate(id, patch);
     } else {
+      // Salvaguarda: só devia acontecer numa fração de segundo antes do
+      // useEffect acima terminar.
       const novoId = onAdd({ nome: local.nome, ...patch });
       setId(novoId);
     }
@@ -2284,6 +2302,7 @@ function Clientes({ obras, clientes, onAddCliente, onUpdateCliente, onDeleteClie
 
       {selected && (
         <ClienteModal
+          key={selectedKey}
           cliente={selected.ficha || { nome: selected.nome }}
           onClose={() => setSelectedKey(null)}
           onAdd={onAddCliente}
@@ -2490,7 +2509,7 @@ function Fornecedores({ fornecedores, onAdd, onUpdate, onDelete }) {
       </div>
       {filtrados.length === 0 && <div style={{ opacity: 0.5, fontSize: 13 }}>Sem resultados.</div>}
 
-      {selected && <FornecedorModal fornecedor={selected} onClose={() => setSelectedId(null)} onUpdate={onUpdate} onDelete={onDelete} />}
+      {selected && <FornecedorModal key={selected.id} fornecedor={selected} onClose={() => setSelectedId(null)} onUpdate={onUpdate} onDelete={onDelete} />}
     </div>
   );
 }
@@ -2512,6 +2531,12 @@ export default function App() {
   const { fornecedores, addFornecedor, updateFornecedor, deleteFornecedor } = useFornecedoresStore();
   const { despesas, addDespesa, updateDespesa, deleteDespesa } = useDespesasStore();
   const { clientes, addCliente, updateCliente, deleteCliente, syncCliente } = useClientesStore();
+  const clientesNomesUnicos = useMemo(() => {
+    const set = new Set();
+    clientes.forEach((c) => c.nome && set.add(c.nome));
+    obras.forEach((o) => o.cliente && set.add(o.cliente));
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [clientes, obras]);
   const [tab, setTab] = useState("painel");
   const [selectedId, setSelectedId] = useState(null);
   const [novaObraOpen, setNovaObraOpen] = useState(false);
@@ -2589,10 +2614,10 @@ export default function App() {
       </div>
 
       {selected && (
-        <ObraModal obra={selected} onClose={() => setSelectedId(null)} onUpdate={updateObra} onChangeEstado={changeEstado} onAddHistorico={addHistorico} onDelete={deleteObra} fornecedorNomes={fornecedores.map((f) => f.nome)} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onSyncCliente={syncCliente} />
+        <ObraModal key={selected.id} obra={selected} onClose={() => setSelectedId(null)} onUpdate={updateObra} onChangeEstado={changeEstado} onAddHistorico={addHistorico} onDelete={deleteObra} fornecedorNomes={fornecedores.map((f) => f.nome)} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onSyncCliente={syncCliente} clientesNomes={clientesNomesUnicos} />
       )}
       {novaObraOpen && (
-        <NovaObraModal suggestedRef={nextRef(obras)} onClose={() => setNovaObraOpen(false)} onCreate={addObra} />
+        <NovaObraModal suggestedRef={nextRef(obras)} onClose={() => setNovaObraOpen(false)} onCreate={addObra} clientesNomes={clientesNomesUnicos} />
       )}
     </div>
   );
