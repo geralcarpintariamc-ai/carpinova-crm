@@ -5,7 +5,7 @@ import {
   Package, CheckCircle2, XCircle, Clock, Download, Building2, ChevronDown,
   ChevronRight, ChevronUp, MapPin, Euro, FileText, Users, LayoutGrid, Table as TableIcon,
   Wallet, Wrench, ArrowRight, Trash2, Save, RotateCcw, Globe, Upload, Paperclip,
-  FileSpreadsheet, Image as ImageIcon, FileType
+  FileSpreadsheet, Image as ImageIcon, FileType, Receipt
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -574,6 +574,7 @@ function useDespesasStore() {
     const nova = {
       id: uid(), descricao: "", categoria: CATEGORIAS_DESPESA[0], valor: null,
       data: todayISO(), obraId: null, recorrente: false, notas: "",
+      fornecedor: "", numeroFatura: "", dataVencimento: "", pago: false, anexo: null,
       ...partial,
     };
     setDespesas((cur) => [nova, ...cur]);
@@ -906,7 +907,7 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
     return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   };
 
-  const [novoCusto, setNovoCusto] = useState({ descricao: "", categoria: CATEGORIAS_DESPESA[0], valor: "" });
+  const [novoCusto, setNovoCusto] = useState({ descricao: "", categoria: CATEGORIAS_DESPESA[0], valor: "", fornecedor: "", numeroFatura: "", dataVencimento: "" });
   const custosObra = useMemo(() => (despesas || []).filter((d) => d.obraId === obra.id), [despesas, obra.id]);
   const totalCustos = useMemo(() => custosObra.reduce((s, d) => s + (Number(d.valor) || 0), 0), [custosObra]);
   const margemReal = local.valorAdjudicado ? Number(local.valorAdjudicado) - totalCustos : null;
@@ -918,8 +919,31 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
     onAddDespesa({
       obraId: obra.id, descricao: novoCusto.descricao.trim(), categoria: novoCusto.categoria,
       valor: novoCusto.valor === "" ? null : Number(novoCusto.valor), data: todayISO(),
+      fornecedor: novoCusto.fornecedor.trim(), numeroFatura: novoCusto.numeroFatura.trim(),
+      dataVencimento: novoCusto.dataVencimento || "", pago: false, anexo: null,
     });
-    setNovoCusto({ descricao: "", categoria: CATEGORIAS_DESPESA[0], valor: "" });
+    setNovoCusto({ descricao: "", categoria: CATEGORIAS_DESPESA[0], valor: "", fornecedor: "", numeroFatura: "", dataVencimento: "" });
+  };
+
+  const [uploadingFaturaId, setUploadingFaturaId] = useState(null);
+  const uploadAnexoFatura = async (despesaId, file) => {
+    if (!file) return;
+    setUploadingFaturaId(despesaId);
+    const path = `faturas/${despesaId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+    const { error } = await supabase.storage.from("anexos").upload(path, file);
+    if (error) {
+      console.error("Erro a enviar fatura:", error);
+    } else {
+      const { data: pub } = supabase.storage.from("anexos").getPublicUrl(path);
+      onUpdateDespesa(despesaId, { anexo: { nome: file.name, path, url: pub.publicUrl } });
+    }
+    setUploadingFaturaId(null);
+  };
+  const removeAnexoFatura = async (despesa) => {
+    if (!despesa.anexo) return;
+    onUpdateDespesa(despesa.id, { anexo: null });
+    const { error } = await supabase.storage.from("anexos").remove([despesa.anexo.path]);
+    if (error) console.error("Erro a remover fatura do storage:", error);
   };
 
   const gerarPagamentos = () => {
@@ -1097,21 +1121,46 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
           </div>
 
           <CutDivider label="Custos da Obra & Margem Real" />
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {custosObra.length === 0 && <div style={{ fontSize: 12, opacity: 0.55 }}>Sem custos registados para esta obra.</div>}
-            {custosObra.map((c) => (
-              <div key={c.id} style={{
-                display: "grid", gridTemplateColumns: "minmax(0,1.4fr) minmax(0,1fr) minmax(0,0.8fr) auto", gap: 8, alignItems: "center",
-                padding: "7px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13,
-              }}>
-                <input style={{ ...inputStyle, fontSize: 12 }} value={c.descricao} onChange={(e) => onUpdateDespesa(c.id, { descricao: e.target.value })} />
-                <select style={{ ...selectStyle, fontSize: 12 }} value={c.categoria} onChange={(e) => onUpdateDespesa(c.id, { categoria: e.target.value })}>
-                  {CATEGORIAS_DESPESA.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
-                </select>
-                <input type="number" style={{ ...inputStyle, fontSize: 12 }} value={c.valor ?? ""} onChange={(e) => onUpdateDespesa(c.id, { valor: e.target.value === "" ? null : Number(e.target.value) })} placeholder="€" />
-                <button onClick={() => onDeleteDespesa(c.id)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={13} /></button>
-              </div>
-            ))}
+            {custosObra.map((c) => {
+              const atrasada = c.dataVencimento && !c.pago && c.dataVencimento < todayISO();
+              return (
+                <div key={c.id} style={{
+                  padding: "8px 10px", background: T.paper2, border: `1px solid ${atrasada ? T.rust : T.line}`, borderRadius: 4, fontSize: 13,
+                  display: "flex", flexDirection: "column", gap: 6,
+                }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.4fr) minmax(0,1fr) minmax(0,0.8fr) auto", gap: 8, alignItems: "center" }}>
+                    <input style={{ ...inputStyle, fontSize: 12, minWidth: 0 }} value={c.descricao} onChange={(e) => onUpdateDespesa(c.id, { descricao: e.target.value })} />
+                    <select style={{ ...selectStyle, fontSize: 12, minWidth: 0 }} value={c.categoria} onChange={(e) => onUpdateDespesa(c.id, { categoria: e.target.value })}>
+                      {CATEGORIAS_DESPESA.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
+                    </select>
+                    <input type="number" style={{ ...inputStyle, fontSize: 12, minWidth: 0 }} value={c.valor ?? ""} onChange={(e) => onUpdateDespesa(c.id, { valor: e.target.value === "" ? null : Number(e.target.value) })} placeholder="€" />
+                    <button onClick={() => onDeleteDespesa(c.id)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={13} /></button>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.2fr) minmax(0,0.9fr) minmax(0,0.9fr) auto auto", gap: 8, alignItems: "center" }}>
+                    <input style={{ ...inputStyle, fontSize: 11.5, minWidth: 0 }} list="fornecedores-datalist" placeholder="Fornecedor" value={c.fornecedor || ""} onChange={(e) => onUpdateDespesa(c.id, { fornecedor: e.target.value })} />
+                    <input style={{ ...inputStyle, fontSize: 11.5, minWidth: 0 }} placeholder="Nº fatura" value={c.numeroFatura || ""} onChange={(e) => onUpdateDespesa(c.id, { numeroFatura: e.target.value })} />
+                    <input type="date" style={{ ...inputStyle, fontSize: 11.5, minWidth: 0 }} value={c.dataVencimento || ""} onChange={(e) => onUpdateDespesa(c.id, { dataVencimento: e.target.value })} title="Data de vencimento" />
+                    <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, whiteSpace: "nowrap", color: c.pago ? T.green : (atrasada ? T.rust : T.ink), fontWeight: 600 }}>
+                      <input type="checkbox" checked={!!c.pago} onChange={(e) => onUpdateDespesa(c.id, { pago: e.target.checked })} />
+                      {c.pago ? "Paga" : atrasada ? "Atrasada" : "Pendente"}
+                    </label>
+                    {c.anexo ? (
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <a href={c.anexo.url} target="_blank" rel="noreferrer" title={c.anexo.nome} style={{ color: T.navy }}><FileType size={15} /></a>
+                        <button onClick={() => removeAnexoFatura(c)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={12} /></button>
+                      </div>
+                    ) : (
+                      <label style={{ cursor: "pointer", color: T.walnut, display: "flex", alignItems: "center" }} title="Anexar PDF da fatura">
+                        <input type="file" accept=".pdf,image/*" style={{ display: "none" }} onChange={(e) => uploadAnexoFatura(c.id, e.target.files[0])} />
+                        {uploadingFaturaId === c.id ? <Clock size={15} /> : <Upload size={15} />}
+                      </label>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
             <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.4fr) minmax(0,1fr) minmax(0,0.8fr) auto", gap: 8 }}>
               <input style={inputStyle} placeholder="Descrição do custo" value={novoCusto.descricao} onChange={(e) => setNovoCusto((s) => ({ ...s, descricao: e.target.value }))} />
               <select style={selectStyle} value={novoCusto.categoria} onChange={(e) => setNovoCusto((s) => ({ ...s, categoria: e.target.value }))}>
@@ -1119,6 +1168,11 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
               </select>
               <input type="number" style={inputStyle} placeholder="€" value={novoCusto.valor} onChange={(e) => setNovoCusto((s) => ({ ...s, valor: e.target.value }))} />
               <Btn small icon={Plus} onClick={addCusto}>Add</Btn>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.2fr) minmax(0,0.9fr) minmax(0,0.9fr)", gap: 8 }}>
+              <input style={{ ...inputStyle, fontSize: 12 }} list="fornecedores-datalist" placeholder="Fornecedor (opcional)" value={novoCusto.fornecedor} onChange={(e) => setNovoCusto((s) => ({ ...s, fornecedor: e.target.value }))} />
+              <input style={{ ...inputStyle, fontSize: 12 }} placeholder="Nº fatura (opcional)" value={novoCusto.numeroFatura} onChange={(e) => setNovoCusto((s) => ({ ...s, numeroFatura: e.target.value }))} />
+              <input type="date" style={{ ...inputStyle, fontSize: 12 }} value={novoCusto.dataVencimento} onChange={(e) => setNovoCusto((s) => ({ ...s, dataVencimento: e.target.value }))} title="Data de vencimento (opcional)" />
             </div>
             {(custosObra.length > 0 || local.valorAdjudicado) && (
               <div style={{ display: "flex", gap: 16, marginTop: 8, padding: "10px 12px", background: T.paper3, borderRadius: 4, flexWrap: "wrap" }}>
@@ -2556,6 +2610,151 @@ function Fornecedores({ fornecedores, onAdd, onUpdate, onDelete }) {
 }
 
 /* ============================================================
+   FATURAS — contas a pagar a fornecedores. É a mesma informação dos
+   "Custos da Obra" (para não haver lançamento duplicado), só que aqui
+   vista como contas a pagar: por fornecedor, com vencimento e estado.
+   ============================================================ */
+function Faturas({ obras, despesas, onUpdateDespesa, onDeleteDespesa, onOpenObra }) {
+  const [q, setQ] = useState("");
+  const [estadoFiltro, setEstadoFiltro] = useState("todas");
+
+  const faturas = useMemo(() => {
+    return despesas.filter((d) => d.obraId).map((d) => {
+      const obra = obras.find((o) => o.id === d.obraId);
+      const atrasada = d.dataVencimento && !d.pago && d.dataVencimento < todayISO();
+      const estado = d.pago ? "paga" : d.dataVencimento ? (atrasada ? "atrasada" : "pendente") : "sem_prazo";
+      return { ...d, obraProjeto: obra?.projeto || "(obra removida)", obraCliente: obra?.cliente || "—", obraRef: obra?.ref || "", estado };
+    });
+  }, [despesas, obras]);
+
+  const ESTADO_INFO = {
+    paga: { label: "Paga", color: T.green },
+    atrasada: { label: "Atrasada", color: T.rust },
+    pendente: { label: "Pendente", color: T.amber },
+    sem_prazo: { label: "Sem prazo definido", color: "#8A7A6B" },
+  };
+
+  const filtradas = useMemo(() => {
+    return faturas
+      .filter((f) => estadoFiltro === "todas" || f.estado === estadoFiltro)
+      .filter((f) => !q || `${f.fornecedor || ""} ${f.obraProjeto} ${f.numeroFatura || ""} ${f.descricao}`.toLowerCase().includes(q.toLowerCase()))
+      .sort((a, b) => {
+        if (!!a.pago !== !!b.pago) return a.pago ? 1 : -1;
+        return (a.dataVencimento || "9999").localeCompare(b.dataVencimento || "9999");
+      });
+  }, [faturas, estadoFiltro, q]);
+
+  const kpis = useMemo(() => {
+    const hoje = todayISO();
+    const em7dias = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+    const porPagar = faturas.filter((f) => !f.pago);
+    const atrasadas = faturas.filter((f) => f.estado === "atrasada");
+    const venceEm7 = porPagar.filter((f) => f.dataVencimento && f.dataVencimento >= hoje && f.dataVencimento <= em7dias);
+    const pagas = faturas.filter((f) => f.pago);
+    return {
+      totalPorPagar: porPagar.reduce((s, f) => s + (Number(f.valor) || 0), 0),
+      totalAtrasadas: atrasadas.reduce((s, f) => s + (Number(f.valor) || 0), 0), nAtrasadas: atrasadas.length,
+      totalVenceEm7: venceEm7.reduce((s, f) => s + (Number(f.valor) || 0), 0), nVenceEm7: venceEm7.length,
+      totalPagas: pagas.reduce((s, f) => s + (Number(f.valor) || 0), 0),
+    };
+  }, [faturas]);
+
+  const porFornecedor = useMemo(() => {
+    const map = {};
+    faturas.filter((f) => !f.pago).forEach((f) => {
+      const nome = f.fornecedor || "(sem fornecedor)";
+      map[nome] = (map[nome] || 0) + (Number(f.valor) || 0);
+    });
+    return Object.entries(map).map(([fornecedor, valor]) => ({ fornecedor, valor })).sort((a, b) => b.valor - a.valor);
+  }, [faturas]);
+
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 8 }}>
+        <KpiCard icon={Wallet} label="Por pagar (total)" value={fmtEUR(kpis.totalPorPagar)} sub="Todas as faturas ainda não pagas" accent={T.amber} />
+        <KpiCard icon={AlertTriangle} label="Atrasadas" value={fmtEUR(kpis.totalAtrasadas)} sub={`${kpis.nAtrasadas} fatura(s)`} accent={T.rust} />
+        <KpiCard icon={Clock} label="Vencem em 7 dias" value={fmtEUR(kpis.totalVenceEm7)} sub={`${kpis.nVenceEm7} fatura(s)`} accent={T.navy} />
+        <KpiCard icon={CheckCircle2} label="Pagas (histórico)" value={fmtEUR(kpis.totalPagas)} accent={T.green} />
+      </div>
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ position: "relative", flex: "1 1 240px" }}>
+          <Search size={14} style={{ position: "absolute", left: 9, top: 9, opacity: 0.5 }} />
+          <input style={{ ...inputStyle, width: "100%", paddingLeft: 28 }} placeholder="Pesquisar fornecedor, obra, nº fatura…" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <select style={selectStyle} value={estadoFiltro} onChange={(e) => setEstadoFiltro(e.target.value)}>
+          <option value="todas">Todos os estados</option>
+          <option value="pendente">Pendente</option>
+          <option value="atrasada">Atrasada</option>
+          <option value="paga">Paga</option>
+          <option value="sem_prazo">Sem prazo definido</option>
+        </select>
+      </div>
+
+      <div style={{ overflowX: "auto", border: `1px solid ${T.line}`, borderRadius: 6, marginBottom: 24 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: T.paper3, textAlign: "left" }}>
+              {["Fornecedor", "Nº Fatura", "Obra", "Valor", "Vencimento", "Estado", "Paga", "Anexo"].map((h) => (
+                <th key={h} style={{ padding: "9px 12px", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: T.walnutDark, whiteSpace: "nowrap" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtradas.map((f, i) => {
+              const info = ESTADO_INFO[f.estado];
+              return (
+                <tr key={f.id} style={{ background: i % 2 ? "#fff" : T.paper, borderTop: `1px solid ${T.line}` }}>
+                  <td style={{ padding: "8px 12px" }}>{f.fornecedor || "—"}</td>
+                  <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>{f.numeroFatura || "—"}</td>
+                  <td style={{ padding: "8px 12px" }}>
+                    <button onClick={() => onOpenObra(f.obraId)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: T.navy, textDecoration: "underline", textDecorationStyle: "dotted", fontSize: 13 }}>
+                      {f.obraProjeto}
+                    </button>
+                    <div style={{ fontSize: 11, opacity: 0.55 }}>{f.obraCliente}</div>
+                  </td>
+                  <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, whiteSpace: "nowrap" }}>{fmtEUR(f.valor)}</td>
+                  <td style={{ padding: "8px 12px", whiteSpace: "nowrap" }}>{f.dataVencimento ? fmtDate(f.dataVencimento) : "—"}</td>
+                  <td style={{ padding: "8px 12px" }}><Tag color={info.color}>{info.label}</Tag></td>
+                  <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                    <input type="checkbox" checked={!!f.pago} onChange={(e) => onUpdateDespesa(f.id, { pago: e.target.checked })} />
+                  </td>
+                  <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                    {f.anexo ? (
+                      <a href={f.anexo.url} target="_blank" rel="noreferrer" title={f.anexo.nome} style={{ color: T.navy }}><FileType size={16} /></a>
+                    ) : (
+                      <span style={{ opacity: 0.3 }}>—</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            {filtradas.length === 0 && (
+              <tr><td colSpan={8} style={{ padding: 24, textAlign: "center", opacity: 0.5 }}>Sem faturas para este filtro.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <CutDivider label="Por pagar, por fornecedor" />
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {porFornecedor.length === 0 && <div style={{ fontSize: 13, opacity: 0.6 }}>Sem valores em aberto.</div>}
+        {porFornecedor.map((f) => (
+          <div key={f.fornecedor} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13 }}>
+            <span style={{ flex: 1, fontWeight: 600 }}>{f.fornecedor}</span>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: T.walnutDark }}>{fmtEUR(f.valor)}</span>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 18, fontStyle: "italic" }}>
+        Esta lista vem diretamente dos custos lançados em cada obra (secção "Custos da Obra & Margem Real") — não é preciso lançar nada aqui em duplicado. Para adicionar uma fatura nova, abre a obra correspondente.
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
    APP PRINCIPAL
    ============================================================ */
 const TABS = [
@@ -2563,6 +2762,7 @@ const TABS = [
   { key: "pipeline", label: "Pipeline", icon: ArrowRight },
   { key: "obras", label: "Obras", icon: TableIcon },
   { key: "financeiro", label: "Financeiro", icon: Wallet },
+  { key: "faturas", label: "Faturas", icon: Receipt },
   { key: "clientes", label: "Clientes", icon: Users },
   { key: "fornecedores", label: "Fornecedores", icon: Package },
 ];
@@ -2650,6 +2850,7 @@ export default function App() {
         {tab === "pipeline" && <Pipeline obras={obras} onOpen={setSelectedId} onChangeEstado={changeEstado} />}
         {tab === "obras" && <ObrasTab obras={obras} onOpen={setSelectedId} onNew={() => setNovaObraOpen(true)} />}
         {tab === "financeiro" && <Financeiro obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} />}
+        {tab === "faturas" && <Faturas obras={obras} despesas={despesas} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onOpenObra={setSelectedId} />}
         {tab === "clientes" && <Clientes obras={obras} clientes={clientes} onAddCliente={addCliente} onUpdateCliente={updateCliente} onDeleteCliente={deleteCliente} onOpenObra={setSelectedId} />}
         {tab === "fornecedores" && <Fornecedores fornecedores={fornecedores} onAdd={addFornecedor} onUpdate={updateFornecedor} onDelete={deleteFornecedor} />}
       </div>
