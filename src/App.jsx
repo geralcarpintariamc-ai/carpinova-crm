@@ -2272,7 +2272,7 @@ function Clientes({ obras, clientes, onAddCliente, onUpdateCliente, onDeleteClie
       const e = map[chave];
       e.total += 1;
       if (WON_KEYS.includes(o.estado)) { e.ganhas += 1; e.valorAdjudicado += Number(o.valorAdjudicado) || 0; }
-      if (LOST_KEYS.includes(o.estado)) e.rejeitadas += 1;
+      if (REJECTED_KEYS.includes(o.estado)) e.rejeitadas += 1;
       if (ACTIVE_KEYS.includes(o.estado)) e.emCurso += 1;
       if (!e.ultimo || (o.dataEntrada || "") > e.ultimo) e.ultimo = o.dataEntrada;
     });
