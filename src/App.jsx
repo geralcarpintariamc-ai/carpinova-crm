@@ -2614,16 +2614,92 @@ function Fornecedores({ fornecedores, onAdd, onUpdate, onDelete }) {
    "Custos da Obra" (para não haver lançamento duplicado), só que aqui
    vista como contas a pagar: por fornecedor, com vencimento e estado.
    ============================================================ */
-function Faturas({ obras, despesas, onUpdateDespesa, onDeleteDespesa, onOpenObra }) {
+function NovaFaturaModal({ onClose, onCreate, obras, fornecedorNomes }) {
+  const [f, setF] = useState({
+    fornecedor: "", numeroFatura: "", categoria: CATEGORIAS_DESPESA[0], valor: "",
+    data: todayISO(), dataVencimento: "", obraId: "", notas: "",
+  });
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const submit = () => {
+    if (!f.fornecedor.trim() && !f.numeroFatura.trim()) return;
+    onCreate({
+      fornecedor: f.fornecedor.trim(), numeroFatura: f.numeroFatura.trim(), categoria: f.categoria,
+      valor: f.valor === "" ? null : Number(f.valor), data: f.data, dataVencimento: f.dataVencimento,
+      obraId: f.obraId || null, notas: f.notas.trim(), pago: false, anexo: null,
+    });
+    onClose();
+  };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(36,31,26,0.55)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: T.paper, borderRadius: 8, width: "100%", maxWidth: 480, border: `1px solid ${T.line}`, padding: 24 }}>
+        <div style={{ fontFamily: "'Roboto Slab', serif", fontWeight: 700, fontSize: 18, marginBottom: 16, color: T.ink }}>Nova fatura</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <Field label="Fornecedor">
+            <input style={inputStyle} list="fornecedores-datalist-fatura" value={f.fornecedor} onChange={(e) => set("fornecedor", e.target.value)} autoFocus />
+            <datalist id="fornecedores-datalist-fatura">
+              {(fornecedorNomes || []).map((n) => <option key={n} value={n} />)}
+            </datalist>
+          </Field>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Field label="Nº da fatura">
+              <input style={inputStyle} value={f.numeroFatura} onChange={(e) => set("numeroFatura", e.target.value)} />
+            </Field>
+            <Field label="Valor €">
+              <input type="number" style={inputStyle} value={f.valor} onChange={(e) => set("valor", e.target.value)} />
+            </Field>
+            <Field label="Categoria">
+              <select style={selectStyle} value={f.categoria} onChange={(e) => set("categoria", e.target.value)}>
+                {CATEGORIAS_DESPESA.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
+              </select>
+            </Field>
+            <Field label="Obra (opcional)">
+              <select style={selectStyle} value={f.obraId} onChange={(e) => set("obraId", e.target.value)}>
+                <option value="">— Compra geral (fábrica) —</option>
+                {obras.map((o) => <option key={o.id} value={o.id}>{o.projeto} — {o.cliente}</option>)}
+              </select>
+            </Field>
+            <Field label="Data de emissão">
+              <input type="date" style={inputStyle} value={f.data} onChange={(e) => set("data", e.target.value)} />
+            </Field>
+            <Field label="Data de vencimento">
+              <input type="date" style={inputStyle} value={f.dataVencimento} onChange={(e) => set("dataVencimento", e.target.value)} />
+            </Field>
+          </div>
+          <Field label="Notas">
+            <textarea style={textareaStyle} rows={2} value={f.notas} onChange={(e) => set("notas", e.target.value)} />
+          </Field>
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 20 }}>
+          <Btn variant="ghost" onClick={onClose}>Cancelar</Btn>
+          <Btn icon={Plus} onClick={submit}>Criar fatura</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   FATURAS — contas a pagar a fornecedores. Junta os custos lançados
+   dentro de cada obra com compras gerais para a fábrica (sem obra
+   associada), sempre que houver um fornecedor identificado.
+   ============================================================ */
+function Faturas({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespesa, onOpenObra, fornecedorNomes }) {
   const [q, setQ] = useState("");
   const [estadoFiltro, setEstadoFiltro] = useState("todas");
+  const [novaFaturaOpen, setNovaFaturaOpen] = useState(false);
+  const [uploadingId, setUploadingId] = useState(null);
 
   const faturas = useMemo(() => {
-    return despesas.filter((d) => d.obraId).map((d) => {
-      const obra = obras.find((o) => o.id === d.obraId);
+    return despesas.filter((d) => d.fornecedor && d.fornecedor.trim()).map((d) => {
+      const obra = d.obraId ? obras.find((o) => o.id === d.obraId) : null;
       const atrasada = d.dataVencimento && !d.pago && d.dataVencimento < todayISO();
       const estado = d.pago ? "paga" : d.dataVencimento ? (atrasada ? "atrasada" : "pendente") : "sem_prazo";
-      return { ...d, obraProjeto: obra?.projeto || "(obra removida)", obraCliente: obra?.cliente || "—", obraRef: obra?.ref || "", estado };
+      return {
+        ...d,
+        obraProjeto: d.obraId ? (obra?.projeto || "(obra removida)") : "Compra geral (fábrica)",
+        obraCliente: obra?.cliente || "",
+        estado,
+      };
     });
   }, [despesas, obras]);
 
@@ -2668,6 +2744,25 @@ function Faturas({ obras, despesas, onUpdateDespesa, onDeleteDespesa, onOpenObra
     return Object.entries(map).map(([fornecedor, valor]) => ({ fornecedor, valor })).sort((a, b) => b.valor - a.valor);
   }, [faturas]);
 
+  const uploadAnexo = async (despesaId, file) => {
+    if (!file) return;
+    setUploadingId(despesaId);
+    const path = `faturas/${despesaId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+    const { error } = await supabase.storage.from("anexos").upload(path, file);
+    if (error) {
+      console.error("Erro a enviar fatura:", error);
+    } else {
+      const { data: pub } = supabase.storage.from("anexos").getPublicUrl(path);
+      onUpdateDespesa(despesaId, { anexo: { nome: file.name, path, url: pub.publicUrl } });
+    }
+    setUploadingId(null);
+  };
+  const removeAnexo = async (f) => {
+    onUpdateDespesa(f.id, { anexo: null });
+    const { error } = await supabase.storage.from("anexos").remove([f.anexo.path]);
+    if (error) console.error("Erro a remover fatura do storage:", error);
+  };
+
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 8 }}>
@@ -2689,6 +2784,7 @@ function Faturas({ obras, despesas, onUpdateDespesa, onDeleteDespesa, onOpenObra
           <option value="paga">Paga</option>
           <option value="sem_prazo">Sem prazo definido</option>
         </select>
+        <Btn small icon={Plus} onClick={() => setNovaFaturaOpen(true)}>Nova fatura</Btn>
       </div>
 
       <div style={{ overflowX: "auto", border: `1px solid ${T.line}`, borderRadius: 6, marginBottom: 24 }}>
@@ -2708,10 +2804,14 @@ function Faturas({ obras, despesas, onUpdateDespesa, onDeleteDespesa, onOpenObra
                   <td style={{ padding: "8px 12px" }}>{f.fornecedor || "—"}</td>
                   <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>{f.numeroFatura || "—"}</td>
                   <td style={{ padding: "8px 12px" }}>
-                    <button onClick={() => onOpenObra(f.obraId)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: T.navy, textDecoration: "underline", textDecorationStyle: "dotted", fontSize: 13 }}>
-                      {f.obraProjeto}
-                    </button>
-                    <div style={{ fontSize: 11, opacity: 0.55 }}>{f.obraCliente}</div>
+                    {f.obraId ? (
+                      <button onClick={() => onOpenObra(f.obraId)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: T.navy, textDecoration: "underline", textDecorationStyle: "dotted", fontSize: 13 }}>
+                        {f.obraProjeto}
+                      </button>
+                    ) : (
+                      <span style={{ opacity: 0.6, fontStyle: "italic" }}>{f.obraProjeto}</span>
+                    )}
+                    {f.obraCliente && <div style={{ fontSize: 11, opacity: 0.55 }}>{f.obraCliente}</div>}
                   </td>
                   <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, whiteSpace: "nowrap" }}>{fmtEUR(f.valor)}</td>
                   <td style={{ padding: "8px 12px", whiteSpace: "nowrap" }}>{f.dataVencimento ? fmtDate(f.dataVencimento) : "—"}</td>
@@ -2721,9 +2821,15 @@ function Faturas({ obras, despesas, onUpdateDespesa, onDeleteDespesa, onOpenObra
                   </td>
                   <td style={{ padding: "8px 12px", textAlign: "center" }}>
                     {f.anexo ? (
-                      <a href={f.anexo.url} target="_blank" rel="noreferrer" title={f.anexo.nome} style={{ color: T.navy }}><FileType size={16} /></a>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "center" }}>
+                        <a href={f.anexo.url} target="_blank" rel="noreferrer" title={f.anexo.nome} style={{ color: T.navy }}><FileType size={16} /></a>
+                        <button onClick={() => removeAnexo(f)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={12} /></button>
+                      </div>
                     ) : (
-                      <span style={{ opacity: 0.3 }}>—</span>
+                      <label style={{ cursor: "pointer", color: T.walnut, display: "flex", justifyContent: "center" }} title="Anexar PDF da fatura">
+                        <input type="file" accept=".pdf,image/*" style={{ display: "none" }} onChange={(e) => uploadAnexo(f.id, e.target.files[0])} />
+                        {uploadingId === f.id ? <Clock size={15} /> : <Upload size={15} />}
+                      </label>
                     )}
                   </td>
                 </tr>
@@ -2748,8 +2854,17 @@ function Faturas({ obras, despesas, onUpdateDespesa, onDeleteDespesa, onOpenObra
       </div>
 
       <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 18, fontStyle: "italic" }}>
-        Esta lista vem diretamente dos custos lançados em cada obra (secção "Custos da Obra & Margem Real") — não é preciso lançar nada aqui em duplicado. Para adicionar uma fatura nova, abre a obra correspondente.
+        As faturas ligadas a uma obra também aparecem na secção "Custos da Obra & Margem Real" dessa obra — é o mesmo registo, visto daqui como conta a pagar. As compras gerais (sem obra) só aparecem aqui.
       </div>
+
+      {novaFaturaOpen && (
+        <NovaFaturaModal
+          onClose={() => setNovaFaturaOpen(false)}
+          onCreate={onAddDespesa}
+          obras={obras}
+          fornecedorNomes={fornecedorNomes}
+        />
+      )}
     </div>
   );
 }
@@ -2850,7 +2965,7 @@ export default function App() {
         {tab === "pipeline" && <Pipeline obras={obras} onOpen={setSelectedId} onChangeEstado={changeEstado} />}
         {tab === "obras" && <ObrasTab obras={obras} onOpen={setSelectedId} onNew={() => setNovaObraOpen(true)} />}
         {tab === "financeiro" && <Financeiro obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} />}
-        {tab === "faturas" && <Faturas obras={obras} despesas={despesas} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onOpenObra={setSelectedId} />}
+        {tab === "faturas" && <Faturas obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onOpenObra={setSelectedId} fornecedorNomes={fornecedores.map((f) => f.nome)} />}
         {tab === "clientes" && <Clientes obras={obras} clientes={clientes} onAddCliente={addCliente} onUpdateCliente={updateCliente} onDeleteCliente={deleteCliente} onOpenObra={setSelectedId} />}
         {tab === "fornecedores" && <Fornecedores fornecedores={fornecedores} onAdd={addFornecedor} onUpdate={updateFornecedor} onDelete={deleteFornecedor} />}
       </div>
