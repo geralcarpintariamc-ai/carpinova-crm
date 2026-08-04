@@ -1727,6 +1727,14 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
 
   const despesasGerais = useMemo(() => despesas.filter((d) => !d.obraId), [despesas]);
 
+  // Se uma obra foi rejeitada (por nós ou pelo cliente), esse gasto nunca
+  // vai acontecer de verdade — não deve contar nas despesas da empresa.
+  // Fica registado na ficha da obra para referência, mas sai daqui.
+  const despesasObraValidas = useMemo(() => {
+    const rejeitadasIds = new Set(obras.filter((o) => REJECTED_KEYS.includes(o.estado)).map((o) => o.id));
+    return despesas.filter((d) => d.obraId && !rejeitadasIds.has(d.obraId));
+  }, [despesas, obras]);
+
   // Uma despesa "Mensal" aplica-se a partir do mês em que foi lançada e
   // continua todos os meses seguintes — não é preciso lançá-la todo mês
   // à mão. Uma despesa não-mensal só conta no seu próprio mês.
@@ -1739,9 +1747,9 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
 
   const custosPorObra = useMemo(() => {
     const map = {};
-    despesas.filter((d) => d.obraId).forEach((d) => { map[d.obraId] = (map[d.obraId] || 0) + (Number(d.valor) || 0); });
+    despesasObraValidas.forEach((d) => { map[d.obraId] = (map[d.obraId] || 0) + (Number(d.valor) || 0); });
     return map;
-  }, [despesas]);
+  }, [despesasObraValidas]);
 
   const mesesDoAno = useMemo(() => Array.from({ length: 12 }, (_, i) => `${ano}-${String(i + 1).padStart(2, "0")}`), [ano]);
 
@@ -1762,26 +1770,25 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
     : `${ano}`;
 
   const dadosMensais = useMemo(() => {
-    const despesasObra = despesas.filter((d) => d.obraId);
     return mesesSelecionados.map((mesKey) => {
       const receita = obras.filter((o) => WON_KEYS.includes(o.estado)).reduce((s, o) => {
         const d = o.dataAdjudicacao || o.dataInicioObra || o.dataEntrada;
         return d && d.slice(0, 7) === mesKey ? s + (Number(o.valorAdjudicado) || 0) : s;
       }, 0);
       const despesaGeral = despesasGerais.reduce((s, d) => s + despesaValorNoMes(d, mesKey), 0);
-      const despesaObra = despesasObra.reduce((s, d) => s + despesaValorNoMes(d, mesKey), 0);
+      const despesaObra = despesasObraValidas.reduce((s, d) => s + despesaValorNoMes(d, mesKey), 0);
       return { mes: monthLabel(mesKey), receita, despesa: despesaGeral + despesaObra, despesaGeral, despesaObra };
     });
-  }, [obras, despesas, despesasGerais, mesesSelecionados]);
+  }, [obras, despesasGerais, despesasObraValidas, mesesSelecionados]);
 
   const despesasPorCategoria = useMemo(() => {
     const map = {};
-    despesas.forEach((d) => {
+    [...despesasGerais, ...despesasObraValidas].forEach((d) => {
       const total = mesesSelecionados.reduce((s, mesKey) => s + despesaValorNoMes(d, mesKey), 0);
       if (total > 0) map[d.categoria] = (map[d.categoria] || 0) + total;
     });
     return Object.entries(map).map(([categoria, valor]) => ({ categoria, valor })).sort((a, b) => b.valor - a.valor);
-  }, [despesas, mesesSelecionados]);
+  }, [despesasGerais, despesasObraValidas, mesesSelecionados]);
 
   const CATEGORIA_CORES = [T.walnut, T.amber, T.navy, T.green, T.rust, "#8A6A1E", "#5C6B8A", "#6B7F3E", "#3D4F44"];
 
@@ -1818,7 +1825,6 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
   }, [mesesSelecionados]);
 
   const totaisAnteriores = useMemo(() => {
-    const despesasObra = despesas.filter((d) => d.obraId);
     let receita = 0, despesaGeral = 0, despesaObra = 0;
     mesesAnteriores.forEach((mesKey) => {
       receita += obras.filter((o) => WON_KEYS.includes(o.estado)).reduce((s, o) => {
@@ -1826,12 +1832,12 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
         return d && d.slice(0, 7) === mesKey ? s + (Number(o.valorAdjudicado) || 0) : s;
       }, 0);
       despesaGeral += despesasGerais.reduce((s, d) => s + despesaValorNoMes(d, mesKey), 0);
-      despesaObra += despesasObra.reduce((s, d) => s + despesaValorNoMes(d, mesKey), 0);
+      despesaObra += despesasObraValidas.reduce((s, d) => s + despesaValorNoMes(d, mesKey), 0);
     });
     const despesaTotal = despesaGeral + despesaObra;
     const lucro = receita - despesaTotal;
     return { receita, despesaTotal, lucro, margemPct: receita > 0 ? (lucro / receita) * 100 : null };
-  }, [obras, despesas, despesasGerais, mesesAnteriores]);
+  }, [obras, despesasGerais, despesasObraValidas, mesesAnteriores]);
 
   // Concentração de clientes: quanto da receita do período vem de cada
   // cliente. Se um só cliente domina, é um risco a vigiar.
@@ -2614,33 +2620,49 @@ function Fornecedores({ fornecedores, onAdd, onUpdate, onDelete }) {
    "Custos da Obra" (para não haver lançamento duplicado), só que aqui
    vista como contas a pagar: por fornecedor, com vencimento e estado.
    ============================================================ */
-function NovaFaturaModal({ onClose, onCreate, obras, fornecedorNomes }) {
+function NovaFaturaModal({ onClose, onCreate, onUpdateDespesa, obras, fornecedorNomes }) {
   const [f, setF] = useState({
     fornecedor: "", numeroFatura: "", categoria: CATEGORIAS_DESPESA[0], valor: "",
     data: todayISO(), dataVencimento: "", obraId: "", notas: "",
   });
+  const [ficheiro, setFicheiro] = useState(null);
+  const [aEnviar, setAEnviar] = useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
-  const submit = () => {
+
+  const submit = async () => {
     if (!f.fornecedor.trim() && !f.numeroFatura.trim()) return;
-    onCreate({
+    setAEnviar(true);
+    const novoId = onCreate({
       fornecedor: f.fornecedor.trim(), numeroFatura: f.numeroFatura.trim(), categoria: f.categoria,
       valor: f.valor === "" ? null : Number(f.valor), data: f.data, dataVencimento: f.dataVencimento,
       obraId: f.obraId || null, notas: f.notas.trim(), pago: false, anexo: null,
     });
+    if (ficheiro && novoId) {
+      const path = `faturas/${novoId}/${Date.now()}_${ficheiro.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      const { error } = await supabase.storage.from("anexos").upload(path, ficheiro);
+      if (error) {
+        console.error("Erro a enviar fatura:", error);
+      } else {
+        const { data: pub } = supabase.storage.from("anexos").getPublicUrl(path);
+        onUpdateDespesa(novoId, { anexo: { nome: ficheiro.name, path, url: pub.publicUrl } });
+      }
+    }
+    setAEnviar(false);
     onClose();
   };
+
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(36,31,26,0.55)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: T.paper, borderRadius: 8, width: "100%", maxWidth: 480, border: `1px solid ${T.line}`, padding: 24 }}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(36,31,26,0.55)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, overflowY: "auto" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: T.paper, borderRadius: 8, width: "100%", maxWidth: 480, border: `1px solid ${T.line}`, padding: 24, overflowX: "hidden" }}>
         <div style={{ fontFamily: "'Roboto Slab', serif", fontWeight: 700, fontSize: 18, marginBottom: 16, color: T.ink }}>Nova fatura</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
           <Field label="Fornecedor">
             <input style={inputStyle} list="fornecedores-datalist-fatura" value={f.fornecedor} onChange={(e) => set("fornecedor", e.target.value)} autoFocus />
             <datalist id="fornecedores-datalist-fatura">
               {(fornecedorNomes || []).map((n) => <option key={n} value={n} />)}
             </datalist>
           </Field>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 12, minWidth: 0 }}>
             <Field label="Nº da fatura">
               <input style={inputStyle} value={f.numeroFatura} onChange={(e) => set("numeroFatura", e.target.value)} />
             </Field>
@@ -2665,13 +2687,16 @@ function NovaFaturaModal({ onClose, onCreate, obras, fornecedorNomes }) {
               <input type="date" style={inputStyle} value={f.dataVencimento} onChange={(e) => set("dataVencimento", e.target.value)} />
             </Field>
           </div>
+          <Field label="PDF da fatura (opcional)">
+            <input type="file" accept=".pdf,image/*" style={{ ...inputStyle, padding: "6px 9px" }} onChange={(e) => setFicheiro(e.target.files[0] || null)} />
+          </Field>
           <Field label="Notas">
             <textarea style={textareaStyle} rows={2} value={f.notas} onChange={(e) => set("notas", e.target.value)} />
           </Field>
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 20 }}>
-          <Btn variant="ghost" onClick={onClose}>Cancelar</Btn>
-          <Btn icon={Plus} onClick={submit}>Criar fatura</Btn>
+          <Btn variant="ghost" onClick={onClose} disabled={aEnviar}>Cancelar</Btn>
+          <Btn icon={Plus} onClick={submit} disabled={aEnviar}>{aEnviar ? "A criar…" : "Criar fatura"}</Btn>
         </div>
       </div>
     </div>
@@ -2861,6 +2886,7 @@ function Faturas({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespe
         <NovaFaturaModal
           onClose={() => setNovaFaturaOpen(false)}
           onCreate={onAddDespesa}
+          onUpdateDespesa={onUpdateDespesa}
           obras={obras}
           fornecedorNomes={fornecedorNomes}
         />
