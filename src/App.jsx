@@ -245,6 +245,20 @@ const SEED_DATA = [
    ============================================================ */
 const fmtEUR = (v) => (v === null || v === undefined || v === "" || isNaN(v)) ? "—" :
   new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(Number(v));
+// O Valor Orçamentado é sempre o valor total de referência de uma obra —
+// o Valor Adjudicado é só o montante necessário para dar início à obra
+// (normalmente a 1ª prestação), não o valor da obra toda. Por isso, para
+// tudo o que precisa do "valor total" (receita, margem, por receber),
+// usa-se sempre o Orçamentado primeiro, com o Adjudicado só como reserva
+// para obras antigas onde o Orçamentado nunca foi preenchido.
+const valorTotalObra = (o) => {
+  if (!o) return null;
+  const orc = o.valorOrcamento;
+  if (orc !== null && orc !== undefined && orc !== "" && !isNaN(Number(orc))) return Number(orc);
+  const adj = o.valorAdjudicado;
+  if (adj !== null && adj !== undefined && adj !== "" && !isNaN(Number(adj))) return Number(adj);
+  return null;
+};
 const fmtDate = (d) => {
   if (!d) return "—";
   const dt = new Date(d + "T00:00:00");
@@ -910,9 +924,10 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
   const [novoCusto, setNovoCusto] = useState({ descricao: "", categoria: CATEGORIAS_DESPESA[0], valor: "", fornecedor: "", numeroFatura: "", dataVencimento: "" });
   const custosObra = useMemo(() => (despesas || []).filter((d) => d.obraId === obra.id), [despesas, obra.id]);
   const totalCustos = useMemo(() => custosObra.reduce((s, d) => s + (Number(d.valor) || 0), 0), [custosObra]);
-  const margemReal = local.valorAdjudicado ? Number(local.valorAdjudicado) - totalCustos : null;
-  const margemRealPct = local.valorAdjudicado && Number(local.valorAdjudicado) > 0
-    ? (margemReal / Number(local.valorAdjudicado)) * 100 : null;
+  const valorRefObra = valorTotalObra(local);
+  const margemReal = valorRefObra !== null ? valorRefObra - totalCustos : null;
+  const margemRealPct = valorRefObra !== null && valorRefObra > 0
+    ? (margemReal / valorRefObra) * 100 : null;
 
   const addCusto = () => {
     if (!novoCusto.descricao.trim()) return;
@@ -947,8 +962,8 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
   };
 
   const gerarPagamentos = () => {
-    if (!local.valorAdjudicado) return;
-    const v = Number(local.valorAdjudicado);
+    if (valorRefObra === null) return;
+    const v = valorRefObra;
     const pagamentos = [
       { label: "Adjudicação (40%)", valor: +(v * 0.4).toFixed(2), data: "", pago: false },
       { label: "Início de obra (40%)", valor: +(v * 0.4).toFixed(2), data: "", pago: false },
@@ -1174,7 +1189,7 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
               <input style={{ ...inputStyle, fontSize: 12 }} placeholder="Nº fatura (opcional)" value={novoCusto.numeroFatura} onChange={(e) => setNovoCusto((s) => ({ ...s, numeroFatura: e.target.value }))} />
               <input type="date" style={{ ...inputStyle, fontSize: 12 }} value={novoCusto.dataVencimento} onChange={(e) => setNovoCusto((s) => ({ ...s, dataVencimento: e.target.value }))} title="Data de vencimento (opcional)" />
             </div>
-            {(custosObra.length > 0 || local.valorAdjudicado) && (
+            {(custosObra.length > 0 || valorRefObra !== null) && (
               <div style={{ display: "flex", gap: 16, marginTop: 8, padding: "10px 12px", background: T.paper3, borderRadius: 4, flexWrap: "wrap" }}>
                 <div>
                   <div style={{ fontSize: 10.5, textTransform: "uppercase", opacity: 0.6, fontWeight: 600 }}>Total de custos</div>
@@ -1208,7 +1223,7 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
             <div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: T.walnutDark, textTransform: "uppercase", letterSpacing: 0.4 }}>Plano de pagamentos</span>
-                {(!local.pagamentos || !local.pagamentos.length) && local.valorAdjudicado && (
+                {(!local.pagamentos || !local.pagamentos.length) && valorRefObra !== null && (
                   <Btn small variant="ghost" onClick={gerarPagamentos}>Gerar 40/40/20</Btn>
                 )}
               </div>
@@ -1440,7 +1455,7 @@ function Painel({ obras, onOpen }) {
     const taxaConversao = (adjudicadas.length + rejeitadas.length) > 0
       ? Math.round((adjudicadas.length / (adjudicadas.length + rejeitadas.length)) * 100) : 0;
     const emProducao = obras.filter((o) => o.estado === "producao").length;
-    const valorAdjudicadoTotal = adjudicadas.reduce((s, o) => s + (Number(o.valorAdjudicado) || 0), 0);
+    const valorAdjudicadoTotal = adjudicadas.reduce((s, o) => s + (valorTotalObra(o) || 0), 0);
     return { emPipelineCount: emPipeline.length, valorPipeline, taxaConversao, emProducao, valorAdjudicadoTotal, adjudicadasCount: adjudicadas.length, rejeitadasCount: rejeitadas.length };
   }, [obras]);
 
@@ -1571,9 +1586,9 @@ function Pipeline({ obras, onOpen, onChangeEstado }) {
                     {o.donoObra && o.donoObra !== o.cliente && (
                       <div style={{ fontSize: 10.5, opacity: 0.55, marginTop: 1, fontStyle: "italic", wordBreak: "break-word" }}>Dono: {o.donoObra}</div>
                     )}
-                    {(o.valorOrcamento || o.valorAdjudicado) && (
+                    {valorTotalObra(o) !== null && (
                       <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, fontWeight: 600, marginTop: 6, color: T.walnutDark }}>
-                        {fmtEUR(o.valorAdjudicado || o.valorOrcamento)}
+                        {fmtEUR(valorTotalObra(o))}
                       </div>
                     )}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, gap: 6 }}>
@@ -1682,7 +1697,7 @@ function ObrasTab({ obras, onOpen, onNew }) {
                   <td style={{ padding: "9px 12px", fontWeight: 600 }}>{o.projeto}</td>
                   <td style={{ padding: "9px 12px" }}><Tag color={stageOf(o.estado).color}>{stageOf(o.estado).label}</Tag></td>
                   <td style={{ padding: "9px 12px", whiteSpace: "nowrap" }}>{fmtDate(o.dataEntrada)}</td>
-                  <td style={{ padding: "9px 12px", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>{fmtEUR(o.valorAdjudicado || o.valorOrcamento)}</td>
+                  <td style={{ padding: "9px 12px", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>{fmtEUR(valorTotalObra(o))}</td>
                   <td style={{ padding: "9px 12px", whiteSpace: "nowrap" }}>
                     {o.proximaAcaoData ? (
                       <span style={{ color: late ? T.rust : T.ink, fontWeight: late ? 700 : 400 }}>
@@ -1773,7 +1788,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
     return mesesSelecionados.map((mesKey) => {
       const receita = obras.filter((o) => WON_KEYS.includes(o.estado)).reduce((s, o) => {
         const d = o.dataAdjudicacao || o.dataInicioObra || o.dataEntrada;
-        return d && d.slice(0, 7) === mesKey ? s + (Number(o.valorAdjudicado) || 0) : s;
+        return d && d.slice(0, 7) === mesKey ? s + (valorTotalObra(o) || 0) : s;
       }, 0);
       const despesaGeral = despesasGerais.reduce((s, d) => s + despesaValorNoMes(d, mesKey), 0);
       const despesaObra = despesasObraValidas.reduce((s, d) => s + despesaValorNoMes(d, mesKey), 0);
@@ -1805,8 +1820,26 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
     const rejeitadoValor = obras.filter((o) => LOST_KEYS.includes(o.estado) && noPeriodo(o)).reduce((s, o) => s + (Number(o.valorOrcamento) || 0), 0);
     const recusadoPorNosValor = obras.filter((o) => o.estado === "rejeitado_nos" && noPeriodo(o)).reduce((s, o) => s + (Number(o.valorOrcamento) || 0), 0);
 
+    // "Por receber" reconcilia sempre com o Valor Orçamentado da obra —
+    // não depende de teres criado uma linha de pagamento para cada
+    // parcela nem de teres preenchido o Valor Adjudicado (que é só o
+    // montante de arranque, não o valor total). Se só lançaste 1 de 3
+    // prestações, o resto continua a contar como pendente.
     let pendente = 0, recebido = 0;
-    won.forEach((o) => (o.pagamentos || []).forEach((p) => { if (p.pago) recebido += p.valor; else pendente += p.valor; }));
+    const obrasSemValor = [];
+    obras.filter((o) => COM_PAGAMENTOS_KEYS.includes(o.estado)).forEach((o) => {
+      const recebidoObra = (o.pagamentos || []).reduce((s, p) => s + (p.pago ? (Number(p.valor) || 0) : 0), 0);
+      recebido += recebidoObra;
+      const valorRef = valorTotalObra(o);
+      if (valorRef !== null && !isNaN(valorRef)) {
+        pendente += Math.max(0, valorRef - recebidoObra);
+      } else {
+        // Sem nenhum valor definido — só temos as linhas itemizadas (se existirem).
+        const somaItemizada = (o.pagamentos || []).reduce((s, p) => s + (Number(p.valor) || 0), 0);
+        pendente += (o.pagamentos || []).reduce((s, p) => s + (!p.pago ? (Number(p.valor) || 0) : 0), 0);
+        if (somaItemizada === 0) obrasSemValor.push(o);
+      }
+    });
 
     const totalDespesasGeraisAno = dadosMensais.reduce((s, m) => s + m.despesaGeral, 0);
     const totalCustosObrasAno = dadosMensais.reduce((s, m) => s + m.despesaObra, 0);
@@ -1814,7 +1847,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
     const lucroLiquido = valorPeriodo - custosTotaisAno;
     const margemLiquidaPct = valorPeriodo > 0 ? (lucroLiquido / valorPeriodo) * 100 : null;
 
-    return { valorAno: valorPeriodo, pipeline, rejeitadoValor, recusadoPorNosValor, pendente, recebido, totalCustosObrasAno, totalDespesasGeraisAno, custosTotaisAno, lucroLiquido, margemLiquidaPct };
+    return { valorAno: valorPeriodo, pipeline, rejeitadoValor, recusadoPorNosValor, pendente, recebido, totalCustosObrasAno, totalDespesasGeraisAno, custosTotaisAno, lucroLiquido, margemLiquidaPct, obrasSemValor };
   }, [obras, dadosMensais, mesesSelecionadosSet]);
 
   // Mesmo número de meses, imediatamente antes do período escolhido —
@@ -1829,7 +1862,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
     mesesAnteriores.forEach((mesKey) => {
       receita += obras.filter((o) => WON_KEYS.includes(o.estado)).reduce((s, o) => {
         const d = o.dataAdjudicacao || o.dataInicioObra || o.dataEntrada;
-        return d && d.slice(0, 7) === mesKey ? s + (Number(o.valorAdjudicado) || 0) : s;
+        return d && d.slice(0, 7) === mesKey ? s + (valorTotalObra(o) || 0) : s;
       }, 0);
       despesaGeral += despesasGerais.reduce((s, d) => s + despesaValorNoMes(d, mesKey), 0);
       despesaObra += despesasObraValidas.reduce((s, d) => s + despesaValorNoMes(d, mesKey), 0);
@@ -1846,7 +1879,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
     obras.filter((o) => WON_KEYS.includes(o.estado)).forEach((o) => {
       const d = o.dataAdjudicacao || o.dataInicioObra || o.dataEntrada;
       if (!d || !mesesSelecionadosSet.has(d.slice(0, 7))) return;
-      map[o.cliente] = (map[o.cliente] || 0) + (Number(o.valorAdjudicado) || 0);
+      map[o.cliente] = (map[o.cliente] || 0) + (valorTotalObra(o) || 0);
     });
     const total = Object.values(map).reduce((s, v) => s + v, 0);
     const lista = Object.entries(map)
@@ -1896,10 +1929,20 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
 
   const pagamentosPendentes = useMemo(() => {
     const list = [];
-    obras.filter((o) => WON_KEYS.includes(o.estado)).forEach((o) => {
+    obras.filter((o) => COM_PAGAMENTOS_KEYS.includes(o.estado)).forEach((o) => {
+      let somaItemizada = 0;
       (o.pagamentos || []).forEach((p, idx) => {
-        if (!p.pago) list.push({ obraId: o.id, projeto: o.projeto, cliente: o.cliente, ...p, idx });
+        const v = Number(p.valor) || 0;
+        somaItemizada += v;
+        if (!p.pago) list.push({ obraId: o.id, projeto: o.projeto, cliente: o.cliente, ...p, idx, valor: v });
       });
+      const valorRef = valorTotalObra(o);
+      if (valorRef !== null && !isNaN(valorRef)) {
+        const restante = valorRef - somaItemizada;
+        if (restante > 0.01) {
+          list.push({ obraId: o.id, projeto: o.projeto, cliente: o.cliente, label: "Restante (sem prestação definida)", valor: restante, data: null, idx: "restante" });
+        }
+      }
     });
     return list;
   }, [obras]);
@@ -1928,15 +1971,19 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
     if (totais.valorAno === 0 && mesesSelecionados.length <= 3) {
       list.push({ tipo: "navy", texto: `Sem receita adjudicada registada em ${periodoLabel}.` });
     }
+    if (totais.obrasSemValor && totais.obrasSemValor.length > 0) {
+      const nomes = totais.obrasSemValor.slice(0, 3).map((o) => o.projeto).join(", ");
+      list.push({ tipo: "amber", texto: `${totais.obrasSemValor.length} obra(s) ganha(s) sem Valor Orçamentado nem Valor Adjudicado definido — não estão a contar em "Por receber" (${nomes}${totais.obrasSemValor.length > 3 ? "…" : ""}).` });
+    }
     return list;
   }, [totais, custosFixosMensais, concentracaoClientes, pagamentosPendentes, mesesSelecionados, periodoLabel]);
 
   const lucroPorObra = useMemo(() => {
     return obras
-      .filter((o) => o.valorAdjudicado)
+      .filter((o) => valorTotalObra(o) !== null)
       .map((o) => {
         const custos = custosPorObra[o.id] || 0;
-        const valor = Number(o.valorAdjudicado);
+        const valor = valorTotalObra(o);
         const margem = valor - custos;
         return { id: o.id, projeto: o.projeto, cliente: o.cliente, valor, custos, margem, margemPct: valor > 0 ? (margem / valor) * 100 : 0 };
       })
@@ -2009,6 +2056,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
         <KpiCard icon={Wallet} label="Custos fixos / mês" value={fmtEUR(custosFixosMensais)} sub="Despesas gerais marcadas 'Mensal'" accent={T.amber} />
         <KpiCard icon={Clock} label="Prazo médio de recebimento" value={prazoMedioRecebimento !== null ? `${prazoMedioRecebimento} dias` : "—"} sub="Da adjudicação ao pagamento" />
         <KpiCard icon={Package} label="Valor em pipeline" value={fmtEUR(totais.pipeline)} sub="Ainda por decidir" />
+        <KpiCard icon={CheckCircle2} label="Recebido" value={fmtEUR(totais.recebido)} sub="Pagamentos já marcados como pagos" accent={T.green} />
         <KpiCard icon={Clock} label="Por receber" value={fmtEUR(totais.pendente)} sub="Pagamentos pendentes" accent={T.amber} />
         <KpiCard icon={XCircle} label="Perdido (rejeitado pelo cliente)" value={fmtEUR(totais.rejeitadoValor)} sub="Conta para a taxa de conversão" accent={T.rust} />
         <KpiCard icon={XCircle} label="Recusado por nós" value={fmtEUR(totais.recusadoPorNosValor)} sub="Não é venda perdida" />
@@ -2284,9 +2332,9 @@ function ClienteModal({ cliente, onClose, onAdd, onUpdate, onDelete, obras, onOp
                     </div>
                     <div style={{ fontSize: 11, opacity: 0.6, fontFamily: "'JetBrains Mono', monospace" }}>{o.ref || "s/ ref"} · {fmtDate(o.dataEntrada)}</div>
                   </div>
-                  {(o.valorAdjudicado || o.valorOrcamento) && (
+                  {valorTotalObra(o) !== null && (
                     <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: T.walnutDark, whiteSpace: "nowrap" }}>
-                      {fmtEUR(o.valorAdjudicado || o.valorOrcamento)}
+                      {fmtEUR(valorTotalObra(o))}
                     </span>
                   )}
                   <Tag color={stage.color}>{stage.label}</Tag>
@@ -2331,7 +2379,7 @@ function Clientes({ obras, clientes, onAddCliente, onUpdateCliente, onDeleteClie
       if (!map[chave]) map[chave] = { chave, nome, total: 0, ganhas: 0, rejeitadas: 0, emCurso: 0, valorAdjudicado: 0, ultimo: null };
       const e = map[chave];
       e.total += 1;
-      if (WON_KEYS.includes(o.estado)) { e.ganhas += 1; e.valorAdjudicado += Number(o.valorAdjudicado) || 0; }
+      if (WON_KEYS.includes(o.estado)) { e.ganhas += 1; e.valorAdjudicado += valorTotalObra(o) || 0; }
       if (REJECTED_KEYS.includes(o.estado)) e.rejeitadas += 1;
       if (ACTIVE_KEYS.includes(o.estado)) e.emCurso += 1;
       if (!e.ultimo || (o.dataEntrada || "") > e.ultimo) e.ultimo = o.dataEntrada;
