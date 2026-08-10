@@ -3127,7 +3127,60 @@ const TABS = [
   { key: "fornecedores", label: "Fornecedores", icon: Package },
 ];
 
-export default function App() {
+/* ============================================================
+   LOGIN — autenticação real via Supabase Auth. Sem isto, qualquer
+   pessoa com o link do site acedia a tudo.
+   ============================================================ */
+function Login() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [erro, setErro] = useState("");
+  const [aEntrar, setAEntrar] = useState(false);
+
+  const entrar = async (e) => {
+    e.preventDefault();
+    setErro("");
+    setAEntrar(true);
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    if (error) {
+      setErro(error.message === "Invalid login credentials" ? "Email ou palavra-passe incorretos." : error.message);
+    }
+    setAEntrar(false);
+  };
+
+  return (
+    <div style={{
+      fontFamily: "'Inter', sans-serif", background: T.paper, minHeight: "100vh",
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+    }}>
+      <style>{FONT_IMPORT}</style>
+      <style>{`* { box-sizing: border-box; } input { min-width: 0; }`}</style>
+      <form onSubmit={entrar} style={{
+        background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 8, padding: 32,
+        width: "100%", maxWidth: 360, boxShadow: "0 20px 50px rgba(0,0,0,0.15)",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24 }}>
+          <div style={{ width: 34, height: 34, borderRadius: "50%", background: T.amber, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Wrench size={16} color="#fff" />
+          </div>
+          <div style={{ fontFamily: "'Roboto Slab', serif", fontWeight: 700, fontSize: 18, color: T.ink }}>Carpinova CRM</div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <Field label="Email">
+            <input type="email" required style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />
+          </Field>
+          <Field label="Palavra-passe">
+            <input type="password" required style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)} />
+          </Field>
+          {erro && <div style={{ fontSize: 12.5, color: T.rust }}>{erro}</div>}
+          <Btn type="submit" disabled={aEntrar}>{aEntrar ? "A entrar…" : "Entrar"}</Btn>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function Carpinova({ onSignOut, userEmail }) {
   const { obras, loading, saveState, addObra, updateObra, changeEstado, addHistorico, deleteObra } = useObrasStore();
   const { fornecedores, addFornecedor, updateFornecedor, deleteFornecedor } = useFornecedoresStore();
   const { despesas, addDespesa, updateDespesa, deleteDespesa } = useDespesasStore();
@@ -3144,6 +3197,20 @@ export default function App() {
   const [clienteFiltroInicial, setClienteFiltroInicial] = useState(null);
 
   const selected = obras.find((o) => o.id === selectedId);
+
+  const exportarBackup = () => {
+    const payload = {
+      exportadoEm: new Date().toISOString(),
+      obras, clientes, fornecedores, despesas,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `carpinova-backup-${todayISO()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   if (loading) {
     return (
@@ -3179,10 +3246,26 @@ export default function App() {
             <div style={{ fontSize: 11, color: T.paper3, letterSpacing: 0.5 }}>Controlo de Obras & Orçamentos</div>
           </div>
         </div>
-        <div style={{ fontSize: 11, color: T.paper3, display: "flex", alignItems: "center", gap: 6 }}>
-          {saveState === "saving" && <><Save size={12} /> a guardar…</>}
-          {saveState === "saved" && <><CheckCircle2 size={12} color="#8FBF7A" /> guardado</>}
-          {saveState === "error" && <><AlertTriangle size={12} color="#E08B7A" /> erro ao guardar</>}
+        <div style={{ fontSize: 11, color: T.paper3, display: "flex", alignItems: "center", gap: 14 }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {saveState === "saving" && <><Save size={12} /> a guardar…</>}
+            {saveState === "saved" && <><CheckCircle2 size={12} color="#8FBF7A" /> guardado</>}
+            {saveState === "error" && <><AlertTriangle size={12} color="#E08B7A" /> erro ao guardar</>}
+          </span>
+          <button onClick={exportarBackup} title="Descarregar cópia de segurança de todos os dados" style={{
+            display: "flex", alignItems: "center", gap: 5, background: "none", border: `1px solid ${T.paper3}`,
+            color: T.paper3, borderRadius: 4, padding: "4px 8px", cursor: "pointer", fontSize: 11,
+          }}>
+            <Download size={12} /> Backup
+          </button>
+          {userEmail && (
+            <span style={{ display: "flex", alignItems: "center", gap: 8, opacity: 0.8 }}>
+              {userEmail}
+              <button onClick={onSignOut} title="Sair" style={{ background: "none", border: "none", color: T.paper3, cursor: "pointer", textDecoration: "underline" }}>
+                Sair
+              </button>
+            </span>
+          )}
         </div>
       </div>
 
@@ -3224,4 +3307,33 @@ export default function App() {
       )}
     </div>
   );
+}
+
+/* ============================================================
+   APP — verifica sessão do Supabase Auth antes de mostrar seja o
+   que for. Sem sessão válida, só se vê o ecrã de login.
+   ============================================================ */
+export default function App() {
+  const [session, setSession] = useState(undefined); // undefined = a verificar, null = sem sessão, objeto = autenticado
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, novaSession) => {
+      setSession(novaSession);
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  if (session === undefined) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: T.paper, fontFamily: "Inter" }}>
+        <style>{FONT_IMPORT}</style>
+        A verificar sessão…
+      </div>
+    );
+  }
+
+  if (!session) return <Login />;
+
+  return <Carpinova onSignOut={() => supabase.auth.signOut()} userEmail={session.user?.email} />;
 }
