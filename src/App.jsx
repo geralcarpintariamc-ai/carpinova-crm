@@ -188,6 +188,7 @@ const seedRow = (o, idx) => ({
   clienteMorada: o.clienteMorada || "",
   donoObra: o.donoObra || "",
   donoObraContacto: o.donoObraContacto || "",
+  moradaObra: o.moradaObra || "",
   cotacoes: [],
   anexos: [],
   assistencias: [],
@@ -408,7 +409,7 @@ function useObrasStore() {
       valorOrcamento: null, valorAdjudicado: null, margem: null,
       dataEntrega: null, dataAdjudicacao: null, dataInicioObra: null, dataConclusao: null,
       proximaAcaoTexto: "", proximaAcaoData: null, motivoRejeicao: "",
-      tipoCliente: "", clienteEmail: "", clienteTelefone: "", clienteNif: "", clienteMorada: "", donoObra: "", donoObraContacto: "",
+      tipoCliente: "", clienteEmail: "", clienteTelefone: "", clienteNif: "", clienteMorada: "", donoObra: "", donoObraContacto: "", moradaObra: "",
       cotacoes: [], anexos: [], assistencias: [], pagamentos: [], historico: [{ data: todayISO(), texto: "Obra criada." }],
       ...partial,
     };
@@ -1204,6 +1205,9 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
             </Field>
             <Field label="Contacto do dono de obra">
               <input style={inputStyle} value={local.donoObraContacto || ""} onChange={(e) => set({ donoObraContacto: e.target.value })} onBlur={() => commit({ donoObraContacto: local.donoObraContacto })} />
+            </Field>
+            <Field label="Morada da obra (só desta obra)">
+              <input style={inputStyle} placeholder="ex: morada do estaleiro/local de entrega, se diferente" value={local.moradaObra || ""} onChange={(e) => set({ moradaObra: e.target.value })} onBlur={() => commit({ moradaObra: local.moradaObra })} />
             </Field>
           </div>
 
@@ -2690,11 +2694,10 @@ function Clientes({ obras, clientes, onAddCliente, onUpdateCliente, onDeleteClie
 /* ============================================================
    MODAL — FICHA DE FORNECEDOR
    ============================================================ */
-function FornecedorModal({ fornecedor, onClose, onUpdate, onDelete }) {
+function FornecedorModal({ fornecedor, onClose, onUpdate, onDelete, despesas }) {
   const [local, setLocal] = useState(fornecedor);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [categoriasTexto, setCategoriasTexto] = useState((fornecedor.categorias || []).join(", "));
-  const [novoMaterial, setNovoMaterial] = useState({ ref: "", preco: "" });
 
   useEffect(() => { setLocal(fornecedor); setCategoriasTexto((fornecedor.categorias || []).join(", ")); }, [fornecedor]);
 
@@ -2706,16 +2709,13 @@ function FornecedorModal({ fornecedor, onClose, onUpdate, onDelete }) {
     commit({ categorias });
   };
 
-  const addMaterial = () => {
-    if (!novoMaterial.ref.trim()) return;
-    const materiais = [...(local.materiais || []), { ...novoMaterial }];
-    commit({ materiais });
-    setNovoMaterial({ ref: "", preco: "" });
-  };
-  const removeMaterial = (idx) => {
-    const materiais = local.materiais.filter((_, i) => i !== idx);
-    commit({ materiais });
-  };
+  const ultimasCompras = useMemo(() => {
+    const chave = normalizaNome(fornecedor.nome);
+    return (despesas || [])
+      .filter((d) => normalizaNome(d.fornecedor) === chave)
+      .sort((a, b) => (b.data || "").localeCompare(a.data || ""))
+      .slice(0, 10);
+  }, [despesas, fornecedor.nome]);
 
   return (
     <div style={{
@@ -2760,21 +2760,18 @@ function FornecedorModal({ fornecedor, onClose, onUpdate, onDelete }) {
             <textarea style={textareaStyle} rows={2} value={local.notas || ""} onChange={(e) => set({ notas: e.target.value })} onBlur={() => commit({ notas: local.notas })} />
           </Field>
 
-          <CutDivider label="Referências de preço (opcional)" />
+          <CutDivider label="Últimas compras" />
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {(local.materiais || []).length === 0 && <div style={{ fontSize: 12, opacity: 0.55 }}>Sem referências de preço registadas.</div>}
-            {(local.materiais || []).map((m, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13 }}>
-                <span style={{ flex: 1 }}>{m.ref}</span>
-                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: T.walnutDark }}>{m.preco}</span>
-                <button onClick={() => removeMaterial(i)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={13} /></button>
+            {ultimasCompras.length === 0 && (
+              <div style={{ fontSize: 12, opacity: 0.55 }}>Ainda sem compras registadas a este fornecedor (aparecem aqui sozinhas assim que lançares um custo ou fatura com este nome).</div>
+            )}
+            {ultimasCompras.map((c) => (
+              <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13 }}>
+                <span style={{ fontSize: 11, opacity: 0.55, fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>{fmtDate(c.data)}</span>
+                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.descricao}</span>
+                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: T.walnutDark, whiteSpace: "nowrap" }}>{fmtEUR(c.valor)}</span>
               </div>
             ))}
-            <div style={{ display: "flex", gap: 8 }}>
-              <input style={{ ...inputStyle, flex: 1 }} placeholder="Material / referência" value={novoMaterial.ref} onChange={(e) => setNovoMaterial((s) => ({ ...s, ref: e.target.value }))} />
-              <input style={{ ...inputStyle, width: 120 }} placeholder="Preço" value={novoMaterial.preco} onChange={(e) => setNovoMaterial((s) => ({ ...s, preco: e.target.value }))} />
-              <Btn small icon={Plus} onClick={addMaterial}>Adicionar</Btn>
-            </div>
           </div>
 
           <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 10, borderTop: `1px solid ${T.line}` }}>
@@ -2798,10 +2795,20 @@ function FornecedorModal({ fornecedor, onClose, onUpdate, onDelete }) {
 /* ============================================================
    FORNECEDORES — diretório de contactos (não lista de preços)
    ============================================================ */
-function Fornecedores({ fornecedores, onAdd, onUpdate, onDelete }) {
+function Fornecedores({ fornecedores, onAdd, onUpdate, onDelete, despesas }) {
   const [q, setQ] = useState("");
   const [selectedId, setSelectedId] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
+
+  const comprasPorFornecedor = useMemo(() => {
+    const map = {};
+    (despesas || []).filter((d) => d.fornecedor).forEach((d) => {
+      const chave = normalizaNome(d.fornecedor);
+      (map[chave] = map[chave] || []).push(d);
+    });
+    Object.values(map).forEach((list) => list.sort((a, b) => (b.data || "").localeCompare(a.data || "")));
+    return map;
+  }, [despesas]);
 
   const filtrados = useMemo(() => {
     if (!q) return fornecedores;
@@ -2830,7 +2837,7 @@ function Fornecedores({ fornecedores, onAdd, onUpdate, onDelete }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
         {filtrados.map((f) => {
-          const temPrecos = (f.materiais || []).length > 0;
+          const compras = comprasPorFornecedor[normalizaNome(f.nome)] || [];
           const expanded = expandedId === f.id;
           return (
             <div key={f.id} style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6, padding: "14px 16px" }}>
@@ -2855,21 +2862,22 @@ function Fornecedores({ fornecedores, onAdd, onUpdate, onDelete }) {
                 </div>
                 {f.notas && <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 6 }}>{f.notas}</div>}
               </div>
-              {temPrecos && (
+              {compras.length > 0 && (
                 <div style={{ marginTop: 10, borderTop: `1px dashed ${T.line}`, paddingTop: 8 }}>
                   <button
                     onClick={(e) => { e.stopPropagation(); setExpandedId(expanded ? null : f.id); }}
                     style={{ background: "none", border: "none", cursor: "pointer", color: T.walnutDark, fontSize: 11.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 4, padding: 0 }}
                   >
                     {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                    {expanded ? "Ocultar" : "Ver"} referências de preço ({f.materiais.length})
+                    {expanded ? "Ocultar" : "Ver"} últimas compras ({compras.length})
                   </button>
                   {expanded && (
                     <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
-                      {f.materiais.map((m, i) => (
-                        <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-                          <span style={{ opacity: 0.75 }}>{m.ref}</span>
-                          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: T.walnutDark }}>{m.preco}</span>
+                      {compras.slice(0, 5).map((c) => (
+                        <div key={c.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12 }}>
+                          <span style={{ opacity: 0.55, fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>{fmtDate(c.data)}</span>
+                          <span style={{ opacity: 0.75, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.descricao}</span>
+                          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: T.walnutDark, whiteSpace: "nowrap" }}>{fmtEUR(c.valor)}</span>
                         </div>
                       ))}
                     </div>
@@ -2882,7 +2890,7 @@ function Fornecedores({ fornecedores, onAdd, onUpdate, onDelete }) {
       </div>
       {filtrados.length === 0 && <div style={{ opacity: 0.5, fontSize: 13 }}>Sem resultados.</div>}
 
-      {selected && <FornecedorModal key={selected.id} fornecedor={selected} onClose={() => setSelectedId(null)} onUpdate={onUpdate} onDelete={onDelete} />}
+      {selected && <FornecedorModal key={selected.id} fornecedor={selected} onClose={() => setSelectedId(null)} onUpdate={onUpdate} onDelete={onDelete} despesas={despesas} />}
     </div>
   );
 }
@@ -3524,7 +3532,7 @@ function Carpinova({ onSignOut, userEmail }) {
         {tab === "financeiro" && <Financeiro obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} equipa={equipa} onAddMembro={addMembro} onUpdateMembro={updateMembro} onDeleteMembro={deleteMembro} />}
         {tab === "faturas" && <Faturas obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onOpenObra={setSelectedId} fornecedorNomes={fornecedores.map((f) => f.nome)} />}
         {tab === "clientes" && <Clientes obras={obras} clientes={clientes} onAddCliente={addCliente} onUpdateCliente={updateCliente} onDeleteCliente={deleteCliente} onOpenObra={setSelectedId} />}
-        {tab === "fornecedores" && <Fornecedores fornecedores={fornecedores} onAdd={addFornecedor} onUpdate={updateFornecedor} onDelete={deleteFornecedor} />}
+        {tab === "fornecedores" && <Fornecedores fornecedores={fornecedores} onAdd={addFornecedor} onUpdate={updateFornecedor} onDelete={deleteFornecedor} despesas={despesas} />}
       </div>
 
       {selected && (
