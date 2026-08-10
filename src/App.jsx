@@ -2900,32 +2900,41 @@ function Fornecedores({ fornecedores, onAdd, onUpdate, onDelete, despesas }) {
    "Custos da Obra" (para não haver lançamento duplicado), só que aqui
    vista como contas a pagar: por fornecedor, com vencimento e estado.
    ============================================================ */
-function NovaFaturaModal({ onClose, onCreate, onUpdateDespesa, obras, fornecedorNomes }) {
+function NovaFaturaModal({ onClose, onCreate, onUpdateDespesa, onDeleteDespesa, obras, fornecedorNomes, fatura }) {
+  const editando = !!fatura;
   const [f, setF] = useState({
-    fornecedor: "", numeroFatura: "", categoria: CATEGORIAS_DESPESA[0], valor: "",
-    data: todayISO(), dataVencimento: "", obraId: "", notas: "",
+    fornecedor: fatura?.fornecedor || "", numeroFatura: fatura?.numeroFatura || "",
+    categoria: fatura?.categoria || CATEGORIAS_DESPESA[0], valor: fatura?.valor ?? "",
+    data: fatura?.data || todayISO(), dataVencimento: fatura?.dataVencimento || "",
+    obraId: fatura?.obraId || "", notas: fatura?.notas || "",
   });
   const [ficheiro, setFicheiro] = useState(null);
   const [aEnviar, setAEnviar] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+
+  const enviarAnexo = async (id, file) => {
+    const path = `faturas/${id}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+    const { error } = await supabase.storage.from("anexos").upload(path, file);
+    if (error) { console.error("Erro a enviar fatura:", error); return; }
+    const { data: pub } = supabase.storage.from("anexos").getPublicUrl(path);
+    onUpdateDespesa(id, { anexo: { nome: file.name, path, url: pub.publicUrl } });
+  };
 
   const submit = async () => {
     if (!f.fornecedor.trim() && !f.numeroFatura.trim()) return;
     setAEnviar(true);
-    const novoId = onCreate({
+    const patch = {
       fornecedor: f.fornecedor.trim(), numeroFatura: f.numeroFatura.trim(), categoria: f.categoria,
       valor: f.valor === "" ? null : Number(f.valor), data: f.data, dataVencimento: f.dataVencimento,
-      obraId: f.obraId || null, notas: f.notas.trim(), pago: false, anexo: null,
-    });
-    if (ficheiro && novoId) {
-      const path = `faturas/${novoId}/${Date.now()}_${ficheiro.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-      const { error } = await supabase.storage.from("anexos").upload(path, ficheiro);
-      if (error) {
-        console.error("Erro a enviar fatura:", error);
-      } else {
-        const { data: pub } = supabase.storage.from("anexos").getPublicUrl(path);
-        onUpdateDespesa(novoId, { anexo: { nome: ficheiro.name, path, url: pub.publicUrl } });
-      }
+      obraId: f.obraId || null, notas: f.notas.trim(),
+    };
+    if (editando) {
+      onUpdateDespesa(fatura.id, patch);
+      if (ficheiro) await enviarAnexo(fatura.id, ficheiro);
+    } else {
+      const novoId = onCreate({ ...patch, pago: false, anexo: null });
+      if (ficheiro && novoId) await enviarAnexo(novoId, ficheiro);
     }
     setAEnviar(false);
     onClose();
@@ -2934,7 +2943,7 @@ function NovaFaturaModal({ onClose, onCreate, onUpdateDespesa, obras, fornecedor
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(36,31,26,0.55)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, overflowY: "auto" }} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: T.paper, borderRadius: 8, width: "100%", maxWidth: 480, border: `1px solid ${T.line}`, padding: 24, overflowX: "hidden" }}>
-        <div style={{ fontFamily: "'Roboto Slab', serif", fontWeight: 700, fontSize: 18, marginBottom: 16, color: T.ink }}>Nova fatura</div>
+        <div style={{ fontFamily: "'Roboto Slab', serif", fontWeight: 700, fontSize: 18, marginBottom: 16, color: T.ink }}>{editando ? "Editar fatura" : "Nova fatura"}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
           <Field label="Fornecedor">
             <input style={inputStyle} list="fornecedores-datalist-fatura" value={f.fornecedor} onChange={(e) => set("fornecedor", e.target.value)} autoFocus />
@@ -2967,16 +2976,29 @@ function NovaFaturaModal({ onClose, onCreate, onUpdateDespesa, obras, fornecedor
               <input type="date" style={inputStyle} value={f.dataVencimento} onChange={(e) => set("dataVencimento", e.target.value)} />
             </Field>
           </div>
-          <Field label="PDF da fatura (opcional)">
+          <Field label={editando && fatura.anexo ? `PDF da fatura (substituir "${fatura.anexo.nome}")` : "PDF da fatura (opcional)"}>
             <input type="file" accept=".pdf,image/*" style={{ ...inputStyle, padding: "6px 9px" }} onChange={(e) => setFicheiro(e.target.files[0] || null)} />
           </Field>
           <Field label="Notas">
             <textarea style={textareaStyle} rows={2} value={f.notas} onChange={(e) => set("notas", e.target.value)} />
           </Field>
         </div>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 20 }}>
-          <Btn variant="ghost" onClick={onClose} disabled={aEnviar}>Cancelar</Btn>
-          <Btn icon={Plus} onClick={submit} disabled={aEnviar}>{aEnviar ? "A criar…" : "Criar fatura"}</Btn>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 20 }}>
+          {editando ? (
+            confirmDelete ? (
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 12, color: T.rust }}>Eliminar esta fatura?</span>
+                <Btn small variant="danger" onClick={() => { onDeleteDespesa(fatura.id); onClose(); }}>Sim, eliminar</Btn>
+                <Btn small variant="ghost" onClick={() => setConfirmDelete(false)}>Cancelar</Btn>
+              </div>
+            ) : (
+              <Btn small variant="danger" icon={Trash2} onClick={() => setConfirmDelete(true)}>Eliminar</Btn>
+            )
+          ) : <span />}
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn variant="ghost" onClick={onClose} disabled={aEnviar}>Cancelar</Btn>
+            <Btn icon={editando ? Save : Plus} onClick={submit} disabled={aEnviar}>{aEnviar ? "A guardar…" : editando ? "Guardar" : "Criar fatura"}</Btn>
+          </div>
         </div>
       </div>
     </div>
@@ -3165,6 +3187,7 @@ function Faturas({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespe
   const [q, setQ] = useState("");
   const [estadoFiltro, setEstadoFiltro] = useState("todas");
   const [novaFaturaOpen, setNovaFaturaOpen] = useState(false);
+  const [editandoId, setEditandoId] = useState(null);
   const [uploadingId, setUploadingId] = useState(null);
 
   const faturas = useMemo(() => {
@@ -3279,21 +3302,21 @@ function Faturas({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespe
               const info = ESTADO_INFO[f.estado];
               return (
                 <tr key={f.id} style={{ background: i % 2 ? "#fff" : T.paper, borderTop: `1px solid ${T.line}` }}>
-                  <td style={{ padding: "8px 12px" }}>{f.fornecedor || "—"}</td>
-                  <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>{f.numeroFatura || "—"}</td>
+                  <td onClick={() => setEditandoId(f.id)} style={{ padding: "8px 12px", cursor: "pointer" }} title="Clica para editar">{f.fornecedor || "—"}</td>
+                  <td onClick={() => setEditandoId(f.id)} style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", fontSize: 12, cursor: "pointer" }} title="Clica para editar">{f.numeroFatura || "—"}</td>
                   <td style={{ padding: "8px 12px" }}>
                     {f.obraId ? (
                       <button onClick={() => onOpenObra(f.obraId)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: T.navy, textDecoration: "underline", textDecorationStyle: "dotted", fontSize: 13 }}>
                         {f.obraProjeto}
                       </button>
                     ) : (
-                      <span style={{ opacity: 0.6, fontStyle: "italic" }}>{f.obraProjeto}</span>
+                      <span onClick={() => setEditandoId(f.id)} style={{ opacity: 0.6, fontStyle: "italic", cursor: "pointer" }} title="Clica para editar">{f.obraProjeto}</span>
                     )}
                     {f.obraCliente && <div style={{ fontSize: 11, opacity: 0.55 }}>{f.obraCliente}</div>}
                   </td>
-                  <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, whiteSpace: "nowrap" }}>{fmtEUR(f.valor)}</td>
-                  <td style={{ padding: "8px 12px", whiteSpace: "nowrap" }}>{f.dataVencimento ? fmtDate(f.dataVencimento) : "—"}</td>
-                  <td style={{ padding: "8px 12px" }}><Tag color={info.color}>{info.label}</Tag></td>
+                  <td onClick={() => setEditandoId(f.id)} style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, whiteSpace: "nowrap", cursor: "pointer" }} title="Clica para editar">{fmtEUR(f.valor)}</td>
+                  <td onClick={() => setEditandoId(f.id)} style={{ padding: "8px 12px", whiteSpace: "nowrap", cursor: "pointer" }} title="Clica para editar">{f.dataVencimento ? fmtDate(f.dataVencimento) : "—"}</td>
+                  <td onClick={() => setEditandoId(f.id)} style={{ padding: "8px 12px", cursor: "pointer" }} title="Clica para editar"><Tag color={info.color}>{info.label}</Tag></td>
                   <td style={{ padding: "8px 12px", textAlign: "center" }}>
                     <input type="checkbox" checked={!!f.pago} onChange={(e) => onUpdateDespesa(f.id, { pago: e.target.checked })} />
                   </td>
@@ -3340,6 +3363,18 @@ function Faturas({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespe
           onClose={() => setNovaFaturaOpen(false)}
           onCreate={onAddDespesa}
           onUpdateDespesa={onUpdateDespesa}
+          onDeleteDespesa={onDeleteDespesa}
+          obras={obras}
+          fornecedorNomes={fornecedorNomes}
+        />
+      )}
+      {editandoId && (
+        <NovaFaturaModal
+          fatura={faturas.find((f) => f.id === editandoId)}
+          onClose={() => setEditandoId(null)}
+          onCreate={onAddDespesa}
+          onUpdateDespesa={onUpdateDespesa}
+          onDeleteDespesa={onDeleteDespesa}
           obras={obras}
           fornecedorNomes={fornecedorNomes}
         />
