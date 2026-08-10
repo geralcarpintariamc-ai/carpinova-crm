@@ -190,6 +190,7 @@ const seedRow = (o, idx) => ({
   donoObraContacto: o.donoObraContacto || "",
   cotacoes: [],
   anexos: [],
+  assistencias: [],
   pagamentos: [],
   historico: [
     { data: o.dataEntrada || new Date().toISOString().slice(0, 10), texto: o.notas || "Importado do histórico de emails." },
@@ -408,7 +409,7 @@ function useObrasStore() {
       dataEntrega: null, dataAdjudicacao: null, dataInicioObra: null, dataConclusao: null,
       proximaAcaoTexto: "", proximaAcaoData: null, motivoRejeicao: "",
       tipoCliente: "", clienteEmail: "", clienteTelefone: "", clienteNif: "", clienteMorada: "", donoObra: "", donoObraContacto: "",
-      cotacoes: [], anexos: [], pagamentos: [], historico: [{ data: todayISO(), texto: "Obra criada." }],
+      cotacoes: [], anexos: [], assistencias: [], pagamentos: [], historico: [{ data: todayISO(), texto: "Obra criada." }],
       ...partial,
     };
     setObras((cur) => [novaObra, ...cur]);
@@ -535,6 +536,77 @@ function useFornecedoresStore() {
   }, []);
 
   return { fornecedores, loading, addFornecedor, updateFornecedor, deleteFornecedor };
+}
+
+/* ============================================================
+   EQUIPA STORE — funcionários e o seu custo/hora, para calcular o
+   custo real de mão-de-obra lançado em cada obra.
+   ============================================================ */
+function useEquipaStore() {
+  const [equipa, setEquipa] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const eRef = useRef([]);
+  eRef.current = equipa;
+
+  useEffect(() => {
+    let channel;
+    let cancelled = false;
+
+    (async () => {
+      const { data, error } = await supabase.from("equipa").select("id, payload").order("updated_at", { ascending: true });
+      if (cancelled) return;
+      if (error) {
+        console.error("Erro a carregar equipa:", error);
+        setLoading(false);
+        return;
+      }
+      setEquipa((data || []).map((r) => ({ ...r.payload, id: r.id })));
+      setLoading(false);
+
+      channel = supabase
+        .channel("equipa-realtime")
+        .on("postgres_changes", { event: "*", schema: "public", table: "equipa" }, (msg) => {
+          setEquipa((cur) => {
+            if (msg.eventType === "DELETE") return cur.filter((m) => m.id !== msg.old.id);
+            const incoming = { ...msg.new.payload, id: msg.new.id };
+            const existe = cur.some((m) => m.id === incoming.id);
+            return existe ? cur.map((m) => (m.id === incoming.id ? incoming : m)) : [...cur, incoming];
+          });
+        })
+        .subscribe();
+    })();
+
+    return () => { cancelled = true; if (channel) supabase.removeChannel(channel); };
+  }, []);
+
+  const persistRow = useCallback(async (id, payload) => {
+    const { error } = await supabase.from("equipa").upsert({ id, payload, updated_at: new Date().toISOString() }, { onConflict: "id" });
+    if (error) console.error("Erro a gravar membro da equipa:", error);
+  }, []);
+
+  const addMembro = useCallback((partial) => {
+    const id = uid();
+    const novo = { id, nome: "", custoHora: null, notas: "", ...partial };
+    setEquipa((cur) => [...cur, novo]);
+    persistRow(id, novo);
+    return id;
+  }, [persistRow]);
+
+  const updateMembro = useCallback((id, patch) => {
+    const next = eRef.current.map((m) => (m.id === id ? { ...m, ...patch } : m));
+    setEquipa(next);
+    const atualizado = next.find((m) => m.id === id);
+    if (atualizado) persistRow(id, atualizado);
+  }, [persistRow]);
+
+  const deleteMembro = useCallback((id) => {
+    setEquipa((cur) => cur.filter((m) => m.id !== id));
+    supabase.from("equipa").delete().eq("id", id).then(({ error }) => {
+      if (error) console.error("Erro a eliminar membro da equipa:", error);
+    });
+  }, []);
+
+  return { equipa, loading, addMembro, updateMembro, deleteMembro };
 }
 
 /* ============================================================
@@ -811,7 +883,7 @@ function Btn({ children, onClick, variant = "primary", icon: Icon, small, type =
 /* ============================================================
    MODAL — DETALHE DA OBRA
    ============================================================ */
-function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, onDelete, fornecedorNomes, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespesa, onSyncCliente, clientesNomes }) {
+function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, onDelete, fornecedorNomes, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespesa, onSyncCliente, clientesNomes, equipa }) {
   const [local, setLocal] = useState(obra);
   const [novaNota, setNovaNota] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -938,6 +1010,46 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
       dataVencimento: novoCusto.dataVencimento || "", pago: false, anexo: null,
     });
     setNovoCusto({ descricao: "", categoria: CATEGORIAS_DESPESA[0], valor: "", fornecedor: "", numeroFatura: "", dataVencimento: "" });
+  };
+
+  // Mão de obra: mesmo mecanismo dos custos (categoria "Mão de obra"),
+  // só que aqui lanças horas em vez de escreveres o € à mão — o custo
+  // calcula-se sozinho a partir do custo/hora da pessoa.
+  const [novaHora, setNovaHora] = useState({ funcionarioId: "", horas: "", data: todayISO() });
+  const horasObra = useMemo(() => custosObra.filter((d) => d.categoria === "Mão de obra" && d.funcionarioId), [custosObra]);
+  const totalHoras = useMemo(() => horasObra.reduce((s, d) => s + (Number(d.horas) || 0), 0), [horasObra]);
+  const addHoras = () => {
+    const membro = (equipa || []).find((m) => m.id === novaHora.funcionarioId);
+    const horas = Number(novaHora.horas);
+    if (!membro || !horas) return;
+    const custoHora = Number(membro.custoHora) || 0;
+    onAddDespesa({
+      obraId: obra.id, descricao: `${membro.nome} — ${horas}h`, categoria: "Mão de obra",
+      valor: +(horas * custoHora).toFixed(2), data: novaHora.data,
+      funcionarioId: membro.id, horas, custoHoraAplicado: custoHora,
+      fornecedor: "", numeroFatura: "", dataVencimento: "", pago: false, anexo: null,
+    });
+    setNovaHora({ funcionarioId: "", horas: "", data: todayISO() });
+  };
+
+  // Assistências / garantia pós-obra
+  const [novaAssistencia, setNovaAssistencia] = useState("");
+  const addAssistencia = () => {
+    if (!novaAssistencia.trim()) return;
+    const assistencias = [...(local.assistencias || []), {
+      id: uid(), descricao: novaAssistencia.trim(), dataReportada: todayISO(), estado: "aberta", dataResolucao: "",
+    }];
+    commit({ assistencias });
+    setNovaAssistencia("");
+  };
+  const toggleAssistencia = (id) => {
+    const assistencias = local.assistencias.map((a) => a.id === id
+      ? { ...a, estado: a.estado === "aberta" ? "resolvida" : "aberta", dataResolucao: a.estado === "aberta" ? todayISO() : "" }
+      : a);
+    commit({ assistencias });
+  };
+  const removeAssistencia = (id) => {
+    commit({ assistencias: local.assistencias.filter((a) => a.id !== id) });
   };
 
   const [uploadingFaturaId, setUploadingFaturaId] = useState(null);
@@ -1216,6 +1328,65 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
             )}
           </div>
 
+          <CutDivider label="Mão de Obra" />
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {horasObra.length === 0 && <div style={{ fontSize: 12, opacity: 0.55 }}>Sem horas registadas para esta obra.</div>}
+            {horasObra.map((h) => (
+              <div key={h.id} style={{
+                display: "grid", gridTemplateColumns: "minmax(0,1.3fr) minmax(0,0.6fr) minmax(0,0.8fr) minmax(0,0.8fr) auto",
+                gap: 8, alignItems: "center", padding: "7px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13,
+              }}>
+                <span>{(equipa || []).find((m) => m.id === h.funcionarioId)?.nome || "(removido)"}</span>
+                <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{h.horas}h</span>
+                <span style={{ fontSize: 11.5, opacity: 0.6 }}>{fmtDate(h.data)}</span>
+                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: T.walnutDark }}>{fmtEUR(h.valor)}</span>
+                <button onClick={() => onDeleteDespesa(h.id)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={13} /></button>
+              </div>
+            ))}
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.3fr) minmax(0,0.6fr) minmax(0,0.8fr) auto", gap: 8 }}>
+              <select style={selectStyle} value={novaHora.funcionarioId} onChange={(e) => setNovaHora((s) => ({ ...s, funcionarioId: e.target.value }))}>
+                <option value="">— Funcionário —</option>
+                {(equipa || []).map((m) => <option key={m.id} value={m.id}>{m.nome}</option>)}
+              </select>
+              <input type="number" style={inputStyle} placeholder="Horas" value={novaHora.horas} onChange={(e) => setNovaHora((s) => ({ ...s, horas: e.target.value }))} />
+              <input type="date" style={inputStyle} value={novaHora.data} onChange={(e) => setNovaHora((s) => ({ ...s, data: e.target.value }))} />
+              <Btn small icon={Plus} onClick={addHoras}>Add</Btn>
+            </div>
+            {horasObra.length > 0 && (
+              <div style={{ fontSize: 11.5, opacity: 0.6, marginTop: 2 }}>
+                Total: {totalHoras}h — {fmtEUR(horasObra.reduce((s, h) => s + (Number(h.valor) || 0), 0))} (já incluído no Total de custos acima)
+              </div>
+            )}
+            {(equipa || []).length === 0 && (
+              <div style={{ fontSize: 11.5, opacity: 0.55 }}>Ainda não há ninguém na equipa — adiciona em Financeiro → Equipa.</div>
+            )}
+          </div>
+
+          <CutDivider label="Assistências / Garantia" />
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {(local.assistencias || []).length === 0 && <div style={{ fontSize: 12, opacity: 0.55 }}>Sem assistências registadas.</div>}
+            {(local.assistencias || []).map((a) => (
+              <div key={a.id} style={{
+                display: "flex", alignItems: "center", gap: 10, padding: "7px 10px",
+                background: a.estado === "aberta" ? "rgba(156,59,36,0.08)" : T.paper2,
+                border: `1px solid ${a.estado === "aberta" ? T.rust : T.line}`, borderRadius: 4, fontSize: 13,
+              }}>
+                <input type="checkbox" checked={a.estado === "resolvida"} onChange={() => toggleAssistencia(a.id)} title="Marcar como resolvida" />
+                <span style={{ flex: 1, textDecoration: a.estado === "resolvida" ? "line-through" : "none", opacity: a.estado === "resolvida" ? 0.6 : 1 }}>{a.descricao}</span>
+                <span style={{ fontSize: 11, opacity: 0.55, whiteSpace: "nowrap" }}>
+                  {a.estado === "resolvida" ? `Resolvida ${fmtDate(a.dataResolucao)}` : `Reportada ${fmtDate(a.dataReportada)}`}
+                </span>
+                <button onClick={() => removeAssistencia(a.id)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={13} /></button>
+              </div>
+            ))}
+            <div style={{ display: "flex", gap: 8 }}>
+              <input style={{ ...inputStyle, flex: 1 }} placeholder="ex: Porta empenada, precisa de ajuste"
+                value={novaAssistencia} onChange={(e) => setNovaAssistencia(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") addAssistencia(); }} />
+              <Btn small icon={Plus} onClick={addAssistencia}>Reportar</Btn>
+            </div>
+          </div>
+
           {COM_PAGAMENTOS_KEYS.includes(local.estado) && (
             <div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -1467,6 +1638,14 @@ function Painel({ obras, onOpen }) {
     return STAGES.map((s) => ({ name: s.label, valor: obras.filter((o) => o.estado === s.key).length, color: s.color }));
   }, [obras]);
 
+  const assistenciasAbertas = useMemo(() => {
+    const list = [];
+    obras.forEach((o) => (o.assistencias || []).forEach((a) => {
+      if (a.estado === "aberta") list.push({ obraId: o.id, projeto: o.projeto, cliente: o.cliente, ...a });
+    }));
+    return list.sort((a, b) => (a.dataReportada || "").localeCompare(b.dataReportada || ""));
+  }, [obras]);
+
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 8 }}>
@@ -1511,6 +1690,26 @@ function Painel({ obras, onOpen }) {
           );
         })}
       </div>
+
+      {assistenciasAbertas.length > 0 && (
+        <>
+          <CutDivider label="Assistências em aberto" />
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {assistenciasAbertas.map((a) => (
+              <div key={a.id} onClick={() => onOpen(a.obraId)} style={{
+                display: "flex", alignItems: "center", gap: 10, padding: "9px 12px",
+                background: "rgba(156,59,36,0.08)", border: `1px solid ${T.rust}`, borderRadius: 4, cursor: "pointer", fontSize: 13,
+              }}>
+                <AlertTriangle size={15} color={T.rust} />
+                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, opacity: 0.7, minWidth: 78 }}>{fmtDate(a.dataReportada)}</span>
+                <span style={{ fontWeight: 600 }}>{a.projeto}</span>
+                <span style={{ opacity: 0.6 }}>— {a.descricao}</span>
+                <span style={{ marginLeft: "auto", opacity: 0.6, fontSize: 11.5 }}>{a.cliente}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1559,6 +1758,7 @@ function Pipeline({ obras, onOpen, onChangeEstado }) {
               {items.map((o) => {
                 const late = isOverdue(o.proximaAcaoData, o.estado);
                 const cotacoesPendentes = (o.cotacoes || []).filter((c) => c.estado === "pedido").length;
+                const assistenciasAbertas = (o.assistencias || []).filter((a) => a.estado === "aberta").length;
                 const isDragging = draggingId === o.id;
                 return (
                   <div
@@ -1599,6 +1799,11 @@ function Pipeline({ obras, onOpen, onChangeEstado }) {
                         {cotacoesPendentes > 0 && (
                           <span title="Cotações por receber" style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 11, color: T.navy }}>
                             <FileText size={12} /> {cotacoesPendentes}
+                          </span>
+                        )}
+                        {assistenciasAbertas > 0 && (
+                          <span title="Assistências em aberto" style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 11, color: T.rust }}>
+                            <AlertTriangle size={12} /> {assistenciasAbertas}
                           </span>
                         )}
                         {late && <AlertTriangle size={13} color={T.rust} />}
@@ -1719,7 +1924,7 @@ function ObrasTab({ obras, onOpen, onNew }) {
 /* ============================================================
    FINANCEIRO
    ============================================================ */
-function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespesa }) {
+function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespesa, equipa, onAddMembro, onUpdateMembro, onDeleteMembro }) {
   const anos = useMemo(() => {
     const set = new Set();
     obras.forEach((o) => {
@@ -2171,6 +2376,28 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
             )}
           </tbody>
         </table>
+      </div>
+
+      <CutDivider label="Equipa (custo/hora)" />
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {(equipa || []).length === 0 && <div style={{ fontSize: 13, opacity: 0.6 }}>Sem equipa registada — adiciona aqui para poderes lançar horas nas obras.</div>}
+        {(equipa || []).map((m) => (
+          <div key={m.id} style={{
+            display: "grid", gridTemplateColumns: "minmax(0,1.4fr) minmax(0,0.7fr) minmax(0,1.4fr) auto", gap: 8, alignItems: "center",
+            padding: "7px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13,
+          }}>
+            <input style={{ ...inputStyle, fontSize: 12 }} value={m.nome} onChange={(e) => onUpdateMembro(m.id, { nome: e.target.value })} />
+            <input type="number" style={{ ...inputStyle, fontSize: 12 }} placeholder="€/hora" value={m.custoHora ?? ""} onChange={(e) => onUpdateMembro(m.id, { custoHora: e.target.value === "" ? null : Number(e.target.value) })} />
+            <input style={{ ...inputStyle, fontSize: 12 }} placeholder="Notas" value={m.notas || ""} onChange={(e) => onUpdateMembro(m.id, { notas: e.target.value })} />
+            <button onClick={() => onDeleteMembro(m.id)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={13} /></button>
+          </div>
+        ))}
+        <div>
+          <Btn small icon={Plus} onClick={() => onAddMembro({ nome: "Novo membro", custoHora: null, notas: "" })}>Adicionar à equipa</Btn>
+        </div>
+        <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 2 }}>
+          O custo/hora aqui é o que usas para calcular o custo de mão-de-obra em cada obra. Já lançaste os salários mensais em "Despesas gerais" abaixo? Não precisas de os duplicar aqui — são coisas diferentes: isto é o valor por hora para orçamentar obras, aquilo é a despesa fixa mensal real.
+        </div>
       </div>
 
       <CutDivider label="Despesas gerais da empresa" />
@@ -3185,6 +3412,7 @@ function Carpinova({ onSignOut, userEmail }) {
   const { fornecedores, addFornecedor, updateFornecedor, deleteFornecedor } = useFornecedoresStore();
   const { despesas, addDespesa, updateDespesa, deleteDespesa } = useDespesasStore();
   const { clientes, addCliente, updateCliente, deleteCliente, syncCliente } = useClientesStore();
+  const { equipa, addMembro, updateMembro, deleteMembro } = useEquipaStore();
   const clientesNomesUnicos = useMemo(() => {
     const set = new Set();
     clientes.forEach((c) => c.nome && set.add(c.nome));
@@ -3201,7 +3429,7 @@ function Carpinova({ onSignOut, userEmail }) {
   const exportarBackup = () => {
     const payload = {
       exportadoEm: new Date().toISOString(),
-      obras, clientes, fornecedores, despesas,
+      obras, clientes, fornecedores, despesas, equipa,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -3293,14 +3521,14 @@ function Carpinova({ onSignOut, userEmail }) {
         {tab === "pipeline" && <Pipeline obras={obras} onOpen={setSelectedId} onChangeEstado={changeEstado} />}
         {tab === "obras" && <ObrasTab obras={obras} onOpen={setSelectedId} onNew={() => setNovaObraOpen(true)} />}
         {tab === "producao" && <Producao obras={obras} onOpenObra={setSelectedId} />}
-        {tab === "financeiro" && <Financeiro obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} />}
+        {tab === "financeiro" && <Financeiro obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} equipa={equipa} onAddMembro={addMembro} onUpdateMembro={updateMembro} onDeleteMembro={deleteMembro} />}
         {tab === "faturas" && <Faturas obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onOpenObra={setSelectedId} fornecedorNomes={fornecedores.map((f) => f.nome)} />}
         {tab === "clientes" && <Clientes obras={obras} clientes={clientes} onAddCliente={addCliente} onUpdateCliente={updateCliente} onDeleteCliente={deleteCliente} onOpenObra={setSelectedId} />}
         {tab === "fornecedores" && <Fornecedores fornecedores={fornecedores} onAdd={addFornecedor} onUpdate={updateFornecedor} onDelete={deleteFornecedor} />}
       </div>
 
       {selected && (
-        <ObraModal key={selected.id} obra={selected} onClose={() => setSelectedId(null)} onUpdate={updateObra} onChangeEstado={changeEstado} onAddHistorico={addHistorico} onDelete={deleteObra} fornecedorNomes={fornecedores.map((f) => f.nome)} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onSyncCliente={syncCliente} clientesNomes={clientesNomesUnicos} />
+        <ObraModal key={selected.id} obra={selected} onClose={() => setSelectedId(null)} onUpdate={updateObra} onChangeEstado={changeEstado} onAddHistorico={addHistorico} onDelete={deleteObra} fornecedorNomes={fornecedores.map((f) => f.nome)} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onSyncCliente={syncCliente} clientesNomes={clientesNomesUnicos} equipa={equipa} />
       )}
       {novaObraOpen && (
         <NovaObraModal suggestedRef={nextRef(obras)} onClose={() => setNovaObraOpen(false)} onCreate={addObra} clientesNomes={clientesNomesUnicos} />
