@@ -1126,12 +1126,9 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
           )}
 
           <CutDivider label="Valores" />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
             <Field label="Valor orçamentado (ex-IVA)">
               <input type="number" style={inputStyle} value={local.valorOrcamento ?? ""} onChange={(e) => set({ valorOrcamento: e.target.value === "" ? null : e.target.value })} onBlur={() => commit({ valorOrcamento: local.valorOrcamento })} />
-            </Field>
-            <Field label="Valor adjudicado (ex-IVA)">
-              <input type="number" style={inputStyle} value={local.valorAdjudicado ?? ""} onChange={(e) => set({ valorAdjudicado: e.target.value === "" ? null : e.target.value })} onBlur={() => commit({ valorAdjudicado: local.valorAdjudicado })} />
             </Field>
           </div>
 
@@ -2752,6 +2749,179 @@ function NovaFaturaModal({ onClose, onCreate, onUpdateDespesa, obras, fornecedor
 }
 
 /* ============================================================
+   PRODUÇÃO — vista de calendário/linha do tempo das obras em
+   produção (e adjudicadas com data de início marcada), para
+   planeares a carga da oficina.
+   ============================================================ */
+const WINDOW_MONTHS_PRODUCAO = 5;
+
+function Producao({ obras, onOpenObra }) {
+  const hoje = new Date();
+  const hojeKey = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`;
+  const [windowStart, setWindowStart] = useState(hojeKey);
+
+  const toDate = (s) => (s ? new Date(s + "T00:00:00") : null);
+
+  const monthKeys = useMemo(
+    () => Array.from({ length: WINDOW_MONTHS_PRODUCAO }, (_, i) => addMonths(windowStart, i)),
+    [windowStart]
+  );
+  const windowStartDate = useMemo(() => new Date(`${windowStart}-01T00:00:00`), [windowStart]);
+  const windowEndDate = useMemo(() => {
+    const [y, m] = addMonths(windowStart, WINDOW_MONTHS_PRODUCAO - 1).split("-").map(Number);
+    return new Date(y, m, 0); // último dia do último mês da janela
+  }, [windowStart]);
+  const totalDays = useMemo(() => Math.round((windowEndDate - windowStartDate) / 86400000) + 1, [windowStartDate, windowEndDate]);
+
+  const monthSegments = useMemo(() => monthKeys.map((mk) => {
+    const [y, m] = mk.split("-").map(Number);
+    const first = new Date(y, m - 1, 1);
+    const last = new Date(y, m, 0);
+    const start = first < windowStartDate ? windowStartDate : first;
+    const end = last > windowEndDate ? windowEndDate : last;
+    const dias = Math.round((end - start) / 86400000) + 1;
+    return { key: mk, label: monthLabel(mk), widthPct: (dias / totalDays) * 100 };
+  }), [monthKeys, windowStartDate, windowEndDate, totalDays]);
+
+  const todayPct = (hoje >= windowStartDate && hoje <= windowEndDate)
+    ? (Math.round((hoje - windowStartDate) / 86400000) / totalDays) * 100 : null;
+
+  const linhas = useMemo(() => {
+    const candidatas = obras.filter((o) => o.estado === "producao" || (o.estado === "adjudicado" && o.dataInicioObra));
+    return candidatas
+      .filter((o) => o.dataInicioObra)
+      .map((o) => {
+        const s = toDate(o.dataInicioObra);
+        const eRaw = o.dataConclusao ? toDate(o.dataConclusao) : null;
+        return { obra: o, s, e: eRaw || windowEndDate, openEnded: !eRaw };
+      })
+      .filter((l) => l.e >= windowStartDate && l.s <= windowEndDate)
+      .sort((a, b) => a.s - b.s);
+  }, [obras, windowStartDate, windowEndDate]);
+
+  const semData = useMemo(
+    () => obras.filter((o) => o.estado === "producao" && !o.dataInicioObra),
+    [obras]
+  );
+
+  const posBarra = (l) => {
+    const clipStart = l.s < windowStartDate ? windowStartDate : l.s;
+    const clipEnd = l.e > windowEndDate ? windowEndDate : l.e;
+    const left = (Math.round((clipStart - windowStartDate) / 86400000) / totalDays) * 100;
+    const width = Math.max(1.5, (Math.round((clipEnd - clipStart) / 86400000) + 1) / totalDays * 100);
+    return { left: `${left}%`, width: `${width}%` };
+  };
+
+  const LABEL_WIDTH = 210;
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <Btn small variant="ghost" onClick={() => setWindowStart(addMonths(windowStart, -1))}>← Anterior</Btn>
+          <Btn small variant="ghost" onClick={() => setWindowStart(hojeKey)}>Hoje</Btn>
+          <Btn small variant="ghost" onClick={() => setWindowStart(addMonths(windowStart, 1))}>Seguinte →</Btn>
+        </div>
+        <div style={{ display: "flex", gap: 14, fontSize: 11.5, opacity: 0.7, alignItems: "center" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 10, height: 10, background: T.walnut, borderRadius: 2, display: "inline-block" }} /> Em produção</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 10, height: 10, background: T.green, borderRadius: 2, display: "inline-block", opacity: 0.6 }} /> Adjudicada (agendada)</span>
+        </div>
+      </div>
+
+      <div style={{ border: `1px solid ${T.line}`, borderRadius: 6, overflow: "hidden", background: T.paper2 }}>
+        {/* Cabeçalho dos meses */}
+        <div style={{ display: "flex" }}>
+          <div style={{ width: LABEL_WIDTH, flexShrink: 0, borderRight: `1px solid ${T.line}`, background: T.paper3 }} />
+          <div style={{ flex: 1, display: "flex" }}>
+            {monthSegments.map((m) => (
+              <div key={m.key} style={{
+                width: `${m.widthPct}%`, padding: "8px 6px", fontSize: 11, fontWeight: 700, textTransform: "uppercase",
+                letterSpacing: 0.4, color: T.walnutDark, background: T.paper3, borderRight: `1px solid ${T.line}`, textAlign: "center",
+              }}>
+                {m.label}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Linhas */}
+        {linhas.map((l, i) => {
+          const late = l.openEnded && l.e < hoje;
+          return (
+            <div key={l.obra.id} style={{ display: "flex", borderTop: `1px solid ${T.line}`, background: i % 2 ? "#fff" : T.paper }}>
+              <div
+                onClick={() => onOpenObra(l.obra.id)}
+                style={{
+                  width: LABEL_WIDTH, flexShrink: 0, padding: "8px 10px", borderRight: `1px solid ${T.line}`,
+                  cursor: "pointer", overflow: "hidden",
+                }}
+              >
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: T.navy, textDecoration: "underline", textDecorationStyle: "dotted", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {l.obra.projeto}
+                </div>
+                <div style={{ fontSize: 11, opacity: 0.6, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.obra.cliente}</div>
+              </div>
+              <div style={{ flex: 1, position: "relative", minHeight: 40 }}>
+                {monthSegments.reduce((acc, m) => {
+                  const prevLeft = acc.left;
+                  acc.lines.push(<div key={m.key} style={{ position: "absolute", left: `${prevLeft + m.widthPct}%`, top: 0, bottom: 0, borderLeft: `1px dashed ${T.line}` }} />);
+                  acc.left += m.widthPct;
+                  return acc;
+                }, { left: 0, lines: [] }).lines}
+                {todayPct !== null && (
+                  <div style={{ position: "absolute", left: `${todayPct}%`, top: 0, bottom: 0, borderLeft: `2px solid ${T.rust}`, zIndex: 2 }} />
+                )}
+                <div
+                  onClick={() => onOpenObra(l.obra.id)}
+                  title={`${fmtDate(l.obra.dataInicioObra)} — ${l.obra.dataConclusao ? fmtDate(l.obra.dataConclusao) : "sem data de fim"}`}
+                  style={{
+                    position: "absolute", top: 7, bottom: 7, ...posBarra(l),
+                    background: l.obra.estado === "producao" ? T.walnut : `${T.green}99`,
+                    border: l.obra.estado === "producao" ? "none" : `1px dashed ${T.green}`,
+                    borderRadius: 4, cursor: "pointer", display: "flex", alignItems: "center",
+                    paddingLeft: 6, overflow: "hidden", zIndex: 3,
+                    backgroundImage: l.openEnded ? `linear-gradient(to right, ${l.obra.estado === "producao" ? T.walnut : T.green} 85%, transparent 100%)` : "none",
+                  }}
+                >
+                  <span style={{ fontSize: 10.5, color: "#fff", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {fmtEUR(valorTotalObra(l.obra))}
+                  </span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {linhas.length === 0 && (
+          <div style={{ padding: 24, textAlign: "center", opacity: 0.5, fontSize: 13, borderTop: `1px solid ${T.line}` }}>
+            Sem obras em produção com data de início nesta janela de tempo.
+          </div>
+        )}
+      </div>
+
+      {semData.length > 0 && (
+        <>
+          <CutDivider label="Em produção, sem data de início definida" />
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {semData.map((o) => (
+              <div key={o.id} onClick={() => onOpenObra(o.id)} style={{
+                display: "flex", alignItems: "center", gap: 10, padding: "8px 12px",
+                background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, cursor: "pointer", fontSize: 13,
+              }}>
+                <AlertTriangle size={14} color={T.amber} />
+                <span style={{ fontWeight: 600 }}>{o.projeto}</span>
+                <span style={{ opacity: 0.6 }}>— {o.cliente}</span>
+                <span style={{ marginLeft: "auto", fontSize: 11.5, opacity: 0.55 }}>Preenche a "Início de obra" na ficha para aparecer no calendário</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+
+/* ============================================================
    FATURAS — contas a pagar a fornecedores. Junta os custos lançados
    dentro de cada obra com compras gerais para a fábrica (sem obra
    associada), sempre que houver um fornecedor identificado.
@@ -2950,6 +3120,7 @@ const TABS = [
   { key: "painel", label: "Painel", icon: LayoutGrid },
   { key: "pipeline", label: "Pipeline", icon: ArrowRight },
   { key: "obras", label: "Obras", icon: TableIcon },
+  { key: "producao", label: "Produção", icon: Calendar },
   { key: "financeiro", label: "Financeiro", icon: Wallet },
   { key: "faturas", label: "Faturas", icon: Receipt },
   { key: "clientes", label: "Clientes", icon: Users },
@@ -3038,6 +3209,7 @@ export default function App() {
         {tab === "painel" && <Painel obras={obras} onOpen={setSelectedId} />}
         {tab === "pipeline" && <Pipeline obras={obras} onOpen={setSelectedId} onChangeEstado={changeEstado} />}
         {tab === "obras" && <ObrasTab obras={obras} onOpen={setSelectedId} onNew={() => setNovaObraOpen(true)} />}
+        {tab === "producao" && <Producao obras={obras} onOpenObra={setSelectedId} />}
         {tab === "financeiro" && <Financeiro obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} />}
         {tab === "faturas" && <Faturas obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onOpenObra={setSelectedId} fornecedorNomes={fornecedores.map((f) => f.nome)} />}
         {tab === "clientes" && <Clientes obras={obras} clientes={clientes} onAddCliente={addCliente} onUpdateCliente={updateCliente} onDeleteCliente={deleteCliente} onOpenObra={setSelectedId} />}
