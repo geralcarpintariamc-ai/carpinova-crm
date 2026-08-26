@@ -42,6 +42,7 @@ const STAGES = [
   { key: "retificacao", label: "Retificação", color: "#8A6A1E" },
   { key: "em_estudo", label: "Em Estudo pelo Cliente", color: "#5C6B8A" },
   { key: "aceite", label: "Orçamento Aceite", color: "#6B7F3E" },
+  { key: "aguarda_adjudicacao", label: "Aguarda Adjudicação", color: "#9B8B3E" },
   { key: "adjudicado", label: "Adjudicado", color: T.green },
   { key: "producao", label: "Em Produção", color: T.walnut },
   { key: "concluido", label: "Concluído", color: "#3D4F44" },
@@ -59,7 +60,7 @@ const WON_KEYS = ["adjudicado", "producao", "concluido"];
 const REJECTED_KEYS = ["rejeitado_nos", "rejeitado_cliente"];
 const LOST_KEYS = ["rejeitado_cliente"];
 // Fases a partir das quais já faz sentido montar o plano de pagamentos
-const COM_PAGAMENTOS_KEYS = ["aceite", "adjudicado", "producao", "concluido"];
+const COM_PAGAMENTOS_KEYS = ["aceite", "aguarda_adjudicacao", "adjudicado", "producao", "concluido"];
 
 /* Tabela de margens (Secção 4 do perfil) — liga o tipo de cliente à margem sugerida */
 const CLIENTE_TIPOS = [
@@ -1093,7 +1094,7 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
     });
     commit({ pagamentos });
     // Regra de negócio: só é "Adjudicado" quando entra o 1º pagamento (adjudicação).
-    if (idx === 0 && pagamentos[0].pago && local.estado === "aceite") {
+    if (idx === 0 && pagamentos[0].pago && (local.estado === "aceite" || local.estado === "aguarda_adjudicacao")) {
       set({ estado: "adjudicado" });
       onChangeEstado(obra.id, "adjudicado");
     }
@@ -1734,7 +1735,7 @@ function Pipeline({ obras, onOpen, onChangeEstado }) {
   };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: `repeat(${STAGES.length}, minmax(0, 1fr))`, gap: 8, paddingBottom: 14 }}>
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(${STAGES.length}, minmax(0, 1fr))`, gap: 6, paddingBottom: 14 }}>
       {STAGES.map((stage) => {
         const items = obras.filter((o) => o.estado === stage.key);
         const isOver = overStage === stage.key;
