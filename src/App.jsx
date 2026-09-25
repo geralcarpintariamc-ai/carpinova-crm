@@ -1409,7 +1409,7 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
                     <div key={i} style={{
                       padding: "7px 10px",
                       background: p.pago ? "rgba(73,107,60,0.12)" : T.paper2, borderRadius: 4,
-                      border: `1px solid ${p.pago && !p.faturaEmitida ? T.amber : T.line}`, fontSize: 13,
+                      border: `1px solid ${T.line}`, fontSize: 13,
                       display: "flex", flexDirection: "column", gap: 6,
                     }}>
                       <div style={{
@@ -1426,21 +1426,20 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
                           <button onClick={() => removePagamento(i)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust, padding: 2 }}><Trash2 size={13} /></button>
                         </div>
                       </div>
-                      {p.pago && (
-                        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 8, alignItems: "center" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: p.pago ? "minmax(0,1fr) auto" : "auto", gap: 8, alignItems: "center" }}>
+                        {p.pago && (
                           <select style={{ ...selectStyle, fontSize: 11.5 }} value={p.metodo || ""} onChange={(e) => updatePagamento(i, { metodo: e.target.value })}>
                             <option value="">— Como foi recebido? —</option>
                             {METODOS_PAGAMENTO.map((m) => <option key={m} value={m}>{m}</option>)}
                           </select>
-                          <label style={{
-                            display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, whiteSpace: "nowrap",
-                            color: p.faturaEmitida ? T.green : T.amber, fontWeight: 600,
-                          }}>
-                            <input type="checkbox" checked={!!p.faturaEmitida} onChange={(e) => updatePagamento(i, { faturaEmitida: e.target.checked })} />
-                            {p.faturaEmitida ? "Fatura emitida" : "Fatura por emitir"}
-                          </label>
-                        </div>
-                      )}
+                        )}
+                        <label style={{
+                          display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, whiteSpace: "nowrap", opacity: 0.75,
+                        }}>
+                          <input type="checkbox" checked={!!p.faturaEmitida} onChange={(e) => updatePagamento(i, { faturaEmitida: e.target.checked })} />
+                          Faturado
+                        </label>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -3244,11 +3243,16 @@ function Receitas({ obras, onOpenObra }) {
     const recebidos = pagamentos.filter((p) => p.pago);
     const porReceber = pagamentos.filter((p) => !p.pago);
     const atrasados = porReceber.filter((p) => p.data && p.data < todayISO());
+    const faturados = pagamentos.filter((p) => p.faturaEmitida);
+    const totalRecebido = recebidos.reduce((s, p) => s + (Number(p.valor) || 0), 0);
+    const totalFaturado = faturados.reduce((s, p) => s + (Number(p.valor) || 0), 0);
     return {
-      totalRecebido: recebidos.reduce((s, p) => s + (Number(p.valor) || 0), 0),
+      totalRecebido,
       totalPorReceber: porReceber.reduce((s, p) => s + (Number(p.valor) || 0), 0),
       totalAtrasado: atrasados.reduce((s, p) => s + (Number(p.valor) || 0), 0),
       nAtrasados: atrasados.length,
+      totalFaturado,
+      diferenca: totalFaturado - totalRecebido,
     };
   }, [pagamentos]);
 
@@ -3266,9 +3270,14 @@ function Receitas({ obras, onOpenObra }) {
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 8 }}>
-        <KpiCard icon={Banknote} label="Total recebido" value={fmtEUR(kpis.totalRecebido)} accent={T.green} />
+        <KpiCard icon={FileText} label="Faturado" value={fmtEUR(kpis.totalFaturado)} accent={T.navy} />
+        <KpiCard icon={Banknote} label="Recebido" value={fmtEUR(kpis.totalRecebido)} accent={T.green} />
         <KpiCard icon={Clock} label="Por receber" value={fmtEUR(kpis.totalPorReceber)} accent={T.amber} />
         <KpiCard icon={AlertTriangle} label="Por receber, já atrasado" value={fmtEUR(kpis.totalAtrasado)} sub={`${kpis.nAtrasados} pagamento(s)`} accent={kpis.nAtrasados > 0 ? T.rust : T.green} />
+      </div>
+
+      <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 8, marginBottom: 16 }}>
+        Faturado e Recebido são coisas independentes — um pagamento pode estar faturado sem ainda ter entrado, ou já ter entrado sem estar faturado. Marca os dois na ficha da obra (secção "Plano de pagamentos").
       </div>
 
       {kpis.nAtrasados > 0 && (
@@ -3298,7 +3307,7 @@ function Receitas({ obras, onOpenObra }) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ background: T.paper3, textAlign: "left" }}>
-              {["Obra", "Cliente", "Descrição", "Valor", "Data", "Método", "Estado", "Fatura"].map((h) => (
+              {["Obra", "Cliente", "Descrição", "Valor", "Data", "Método", "Estado", "Faturado"].map((h) => (
                 <th key={h} style={{ padding: "9px 12px", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: T.walnutDark, whiteSpace: "nowrap" }}>{h}</th>
               ))}
             </tr>
@@ -3324,8 +3333,8 @@ function Receitas({ obras, onOpenObra }) {
                   <td style={{ padding: "8px 12px" }}>
                     <Tag color={p.pago ? T.green : (atrasado ? T.rust : T.amber)}>{p.pago ? "Recebido" : atrasado ? "Atrasado" : "Por receber"}</Tag>
                   </td>
-                  <td style={{ padding: "8px 12px" }}>
-                    {p.pago ? <Tag color={p.faturaEmitida ? T.green : T.rust}>{p.faturaEmitida ? "Emitida" : "Por emitir"}</Tag> : <span style={{ opacity: 0.3 }}>—</span>}
+                  <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                    {p.faturaEmitida ? <CheckCircle2 size={15} color={T.green} /> : <span style={{ opacity: 0.3 }}>—</span>}
                   </td>
                 </tr>
               );
