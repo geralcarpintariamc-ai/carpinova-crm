@@ -5,7 +5,7 @@ import {
   Package, CheckCircle2, XCircle, Clock, Download, Building2, ChevronDown,
   ChevronRight, ChevronUp, MapPin, Euro, FileText, Users, LayoutGrid, Table as TableIcon,
   Wallet, Wrench, ArrowRight, Trash2, Save, RotateCcw, Globe, Upload, Paperclip,
-  FileSpreadsheet, Image as ImageIcon, FileType, Receipt
+  FileSpreadsheet, Image as ImageIcon, FileType, Receipt, Banknote
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -77,6 +77,9 @@ const CATEGORIAS_DESPESA = [
   "Material", "Mão de obra", "Subcontratado", "Transporte",
   "Renda / Instalações", "Salários", "Equipamento / Ferramentas", "Combustível", "Outro",
 ];
+
+/* Métodos de recebimento de pagamentos de clientes */
+const METODOS_PAGAMENTO = ["Transferência Bancária", "Numerário", "MB Way", "Cheque", "Cartão", "Outro"];
 
 /* Estados de uma cotação pedida a fornecedor */
 const COTACAO_ESTADOS = [
@@ -1079,9 +1082,9 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
     if (valorRefObra === null) return;
     const v = valorRefObra;
     const pagamentos = [
-      { label: "Adjudicação (40%)", valor: +(v * 0.4).toFixed(2), data: "", pago: false },
-      { label: "Início de obra (40%)", valor: +(v * 0.4).toFixed(2), data: "", pago: false },
-      { label: "Conclusão (20%)", valor: +(v * 0.2).toFixed(2), data: "", pago: false },
+      { label: "Adjudicação (40%)", valor: +(v * 0.4).toFixed(2), data: "", pago: false, metodo: "", faturaEmitida: false },
+      { label: "Início de obra (40%)", valor: +(v * 0.4).toFixed(2), data: "", pago: false, metodo: "", faturaEmitida: false },
+      { label: "Conclusão (20%)", valor: +(v * 0.2).toFixed(2), data: "", pago: false, metodo: "", faturaEmitida: false },
     ];
     commit({ pagamentos });
   };
@@ -1116,7 +1119,7 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
     const pagamentos = [...(local.pagamentos || []), {
       label: novoPagamento.label.trim(),
       valor: novoPagamento.valor === "" ? null : Number(novoPagamento.valor),
-      data: novoPagamento.data || "", pago: false,
+      data: novoPagamento.data || "", pago: false, metodo: "", faturaEmitida: false,
     }];
     commit({ pagamentos });
     setNovoPagamento({ label: "", valor: "", data: "" });
@@ -1404,20 +1407,40 @@ function ObraModal({ obra, onClose, onUpdate, onChangeEstado, onAddHistorico, on
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {local.pagamentos.map((p, i) => (
                     <div key={i} style={{
-                      display: "grid", gridTemplateColumns: "auto minmax(0,1.4fr) minmax(0,0.8fr) minmax(0,0.9fr) auto",
-                      gap: 8, alignItems: "center", padding: "7px 10px",
+                      padding: "7px 10px",
                       background: p.pago ? "rgba(73,107,60,0.12)" : T.paper2, borderRadius: 4,
-                      border: `1px solid ${T.line}`, fontSize: 13,
+                      border: `1px solid ${p.pago && !p.faturaEmitida ? T.amber : T.line}`, fontSize: 13,
+                      display: "flex", flexDirection: "column", gap: 6,
                     }}>
-                      <input type="checkbox" checked={!!p.pago} onChange={() => togglePagamento(i)} title="Pago" />
-                      <input style={{ ...inputStyle, fontSize: 12 }} value={p.label} onChange={(e) => updatePagamento(i, { label: e.target.value })} />
-                      <input type="number" style={{ ...inputStyle, fontSize: 12 }} value={p.valor ?? ""} placeholder="€"
-                        onChange={(e) => updatePagamento(i, { valor: e.target.value === "" ? null : Number(e.target.value) })} />
-                      <input type="date" style={{ ...inputStyle, fontSize: 12 }} value={p.data || ""} onChange={(e) => updatePagamento(i, { data: e.target.value })} />
-                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                        {p.pago && <CheckCircle2 size={15} color={T.green} />}
-                        <button onClick={() => removePagamento(i)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust, padding: 2 }}><Trash2 size={13} /></button>
+                      <div style={{
+                        display: "grid", gridTemplateColumns: "auto minmax(0,1.4fr) minmax(0,0.8fr) minmax(0,0.9fr) auto",
+                        gap: 8, alignItems: "center",
+                      }}>
+                        <input type="checkbox" checked={!!p.pago} onChange={() => togglePagamento(i)} title="Pago" />
+                        <input style={{ ...inputStyle, fontSize: 12 }} value={p.label} onChange={(e) => updatePagamento(i, { label: e.target.value })} />
+                        <input type="number" style={{ ...inputStyle, fontSize: 12 }} value={p.valor ?? ""} placeholder="€"
+                          onChange={(e) => updatePagamento(i, { valor: e.target.value === "" ? null : Number(e.target.value) })} />
+                        <input type="date" style={{ ...inputStyle, fontSize: 12 }} value={p.data || ""} onChange={(e) => updatePagamento(i, { data: e.target.value })} />
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          {p.pago && <CheckCircle2 size={15} color={T.green} />}
+                          <button onClick={() => removePagamento(i)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust, padding: 2 }}><Trash2 size={13} /></button>
+                        </div>
                       </div>
+                      {p.pago && (
+                        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 8, alignItems: "center" }}>
+                          <select style={{ ...selectStyle, fontSize: 11.5 }} value={p.metodo || ""} onChange={(e) => updatePagamento(i, { metodo: e.target.value })}>
+                            <option value="">— Como foi recebido? —</option>
+                            {METODOS_PAGAMENTO.map((m) => <option key={m} value={m}>{m}</option>)}
+                          </select>
+                          <label style={{
+                            display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, whiteSpace: "nowrap",
+                            color: p.faturaEmitida ? T.green : T.amber, fontWeight: 600,
+                          }}>
+                            <input type="checkbox" checked={!!p.faturaEmitida} onChange={(e) => updatePagamento(i, { faturaEmitida: e.target.checked })} />
+                            {p.faturaEmitida ? "Fatura emitida" : "Fatura por emitir"}
+                          </label>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -3184,6 +3207,164 @@ function Producao({ obras, onOpenObra }) {
    dentro de cada obra com compras gerais para a fábrica (sem obra
    associada), sempre que houver um fornecedor identificado.
    ============================================================ */
+/* ============================================================
+   RECEITAS — todos os pagamentos de todas as obras, num só sítio:
+   o que já entrou (como e quando) e o que ainda falta receber.
+   Serve também para garantir que tudo o que é recebido acaba
+   faturado — não é um registo paralelo, é o mesmo plano de
+   pagamentos de cada obra, só visto em conjunto.
+   ============================================================ */
+function Receitas({ obras, onOpenObra }) {
+  const [q, setQ] = useState("");
+  const [filtro, setFiltro] = useState("todos"); // todos | recebidos | por_receber | sem_fatura
+
+  const pagamentos = useMemo(() => {
+    const list = [];
+    obras.filter((o) => COM_PAGAMENTOS_KEYS.includes(o.estado)).forEach((o) => {
+      (o.pagamentos || []).forEach((p, idx) => {
+        list.push({ obraId: o.id, projeto: o.projeto, cliente: o.cliente, ...p, idx });
+      });
+    });
+    return list;
+  }, [obras]);
+
+  const filtrados = useMemo(() => {
+    return pagamentos
+      .filter((p) => {
+        if (filtro === "recebidos") return p.pago;
+        if (filtro === "por_receber") return !p.pago;
+        if (filtro === "atrasados") return !p.pago && p.data && p.data < todayISO();
+        return true;
+      })
+      .filter((p) => !q || `${p.projeto} ${p.cliente} ${p.label} ${p.metodo || ""}`.toLowerCase().includes(q.toLowerCase()))
+      .sort((a, b) => (b.data || "9999").localeCompare(a.data || "9999"));
+  }, [pagamentos, filtro, q]);
+
+  const kpis = useMemo(() => {
+    const recebidos = pagamentos.filter((p) => p.pago);
+    const porReceber = pagamentos.filter((p) => !p.pago);
+    const atrasados = porReceber.filter((p) => p.data && p.data < todayISO());
+    return {
+      totalRecebido: recebidos.reduce((s, p) => s + (Number(p.valor) || 0), 0),
+      totalPorReceber: porReceber.reduce((s, p) => s + (Number(p.valor) || 0), 0),
+      totalAtrasado: atrasados.reduce((s, p) => s + (Number(p.valor) || 0), 0),
+      nAtrasados: atrasados.length,
+    };
+  }, [pagamentos]);
+
+  const porMetodo = useMemo(() => {
+    const map = {};
+    pagamentos.filter((p) => p.pago).forEach((p) => {
+      const m = p.metodo || "(não indicado)";
+      map[m] = (map[m] || 0) + (Number(p.valor) || 0);
+    });
+    return Object.entries(map).map(([metodo, valor]) => ({ metodo, valor })).sort((a, b) => b.valor - a.valor);
+  }, [pagamentos]);
+
+  const METODO_CORES = [T.walnut, T.navy, T.green, T.amber, "#8A6A1E", T.rust];
+
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 8 }}>
+        <KpiCard icon={Banknote} label="Total recebido" value={fmtEUR(kpis.totalRecebido)} accent={T.green} />
+        <KpiCard icon={Clock} label="Por receber" value={fmtEUR(kpis.totalPorReceber)} accent={T.amber} />
+        <KpiCard icon={AlertTriangle} label="Por receber, já atrasado" value={fmtEUR(kpis.totalAtrasado)} sub={`${kpis.nAtrasados} pagamento(s)`} accent={kpis.nAtrasados > 0 ? T.rust : T.green} />
+      </div>
+
+      {kpis.nAtrasados > 0 && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", marginBottom: 16,
+          background: `${T.rust}18`, border: `1px solid ${T.rust}`, borderRadius: 4, fontSize: 13,
+        }}>
+          <AlertTriangle size={14} color={T.rust} />
+          Há {kpis.nAtrasados} pagamento(s) por receber com data já passada, totalizando {fmtEUR(kpis.totalAtrasado)} — usa o filtro "Por receber" abaixo para os veres todos.
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ position: "relative", flex: "1 1 240px" }}>
+          <Search size={14} style={{ position: "absolute", left: 9, top: 9, opacity: 0.5 }} />
+          <input style={{ ...inputStyle, width: "100%", paddingLeft: 28 }} placeholder="Pesquisar obra, cliente, método…" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <select style={selectStyle} value={filtro} onChange={(e) => setFiltro(e.target.value)}>
+          <option value="todos">Todos</option>
+          <option value="recebidos">Recebidos</option>
+          <option value="por_receber">Por receber</option>
+          <option value="atrasados">Atrasados</option>
+        </select>
+      </div>
+
+      <div style={{ overflowX: "auto", border: `1px solid ${T.line}`, borderRadius: 6, marginBottom: 24 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: T.paper3, textAlign: "left" }}>
+              {["Obra", "Cliente", "Descrição", "Valor", "Data", "Método", "Estado", "Fatura"].map((h) => (
+                <th key={h} style={{ padding: "9px 12px", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: T.walnutDark, whiteSpace: "nowrap" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtrados.map((p, i) => {
+              const atrasado = !p.pago && p.data && p.data < todayISO();
+              return (
+                <tr key={`${p.obraId}-${p.idx}`} style={{ background: atrasado ? "rgba(156,59,36,0.08)" : (i % 2 ? "#fff" : T.paper), borderTop: `1px solid ${T.line}` }}>
+                  <td style={{ padding: "8px 12px" }}>
+                    <button onClick={() => onOpenObra(p.obraId)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: T.navy, textDecoration: "underline", textDecorationStyle: "dotted", fontSize: 13 }}>
+                      {p.projeto}
+                    </button>
+                  </td>
+                  <td style={{ padding: "8px 12px" }}>{p.cliente}</td>
+                  <td style={{ padding: "8px 12px" }}>{p.label}</td>
+                  <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, whiteSpace: "nowrap" }}>{fmtEUR(p.valor)}</td>
+                  <td style={{ padding: "8px 12px", whiteSpace: "nowrap", color: atrasado ? T.rust : T.ink, fontWeight: atrasado ? 700 : 400 }}>
+                    {atrasado && <AlertTriangle size={12} style={{ marginRight: 4, verticalAlign: -2 }} />}
+                    {p.data ? fmtDate(p.data) : "—"}
+                  </td>
+                  <td style={{ padding: "8px 12px" }}>{p.metodo || "—"}</td>
+                  <td style={{ padding: "8px 12px" }}>
+                    <Tag color={p.pago ? T.green : (atrasado ? T.rust : T.amber)}>{p.pago ? "Recebido" : atrasado ? "Atrasado" : "Por receber"}</Tag>
+                  </td>
+                  <td style={{ padding: "8px 12px" }}>
+                    {p.pago ? <Tag color={p.faturaEmitida ? T.green : T.rust}>{p.faturaEmitida ? "Emitida" : "Por emitir"}</Tag> : <span style={{ opacity: 0.3 }}>—</span>}
+                  </td>
+                </tr>
+              );
+            })}
+            {filtrados.length === 0 && (
+              <tr><td colSpan={8} style={{ padding: 24, textAlign: "center", opacity: 0.5 }}>Sem pagamentos para este filtro.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <CutDivider label="Recebido por método de pagamento" />
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {porMetodo.length === 0 && <div style={{ fontSize: 13, opacity: 0.6 }}>Sem pagamentos recebidos ainda.</div>}
+        {porMetodo.map((m, i) => (
+          <div key={m.metodo} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
+            <span style={{ width: 10, height: 10, borderRadius: "50%", background: METODO_CORES[i % METODO_CORES.length], flexShrink: 0 }} />
+            <span style={{ minWidth: 170 }}>{m.metodo}</span>
+            <div style={{ flex: 1, background: T.paper3, borderRadius: 3, height: 14, position: "relative", overflow: "hidden" }}>
+              <div style={{ width: `${kpis.totalRecebido > 0 ? (m.valor / kpis.totalRecebido) * 100 : 0}%`, height: "100%", background: METODO_CORES[i % METODO_CORES.length], borderRadius: 3 }} />
+            </div>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, minWidth: 90, textAlign: "right" }}>{fmtEUR(m.valor)}</span>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 18, fontStyle: "italic" }}>
+        Isto reflete o plano de pagamentos de cada obra — edita o método, a data ou se a fatura já foi emitida diretamente na ficha da obra (secção "Plano de pagamentos").
+      </div>
+    </div>
+  );
+}
+
+
+/* ============================================================
+   FATURAS — contas a pagar a fornecedores. Junta os custos lançados
+   dentro de cada obra com compras gerais para a fábrica (sem obra
+   associada), sempre que houver um fornecedor identificado.
+   ============================================================ */
 function Faturas({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespesa, onOpenObra, fornecedorNomes }) {
   const [q, setQ] = useState("");
   const [estadoFiltro, setEstadoFiltro] = useState("todas");
@@ -3393,6 +3574,7 @@ const TABS = [
   { key: "obras", label: "Obras", icon: TableIcon },
   { key: "producao", label: "Produção", icon: Calendar },
   { key: "financeiro", label: "Financeiro", icon: Wallet },
+  { key: "receitas", label: "Receitas", icon: Banknote },
   { key: "faturas", label: "Faturas", icon: Receipt },
   { key: "clientes", label: "Clientes", icon: Users },
   { key: "fornecedores", label: "Fornecedores", icon: Package },
@@ -3566,6 +3748,7 @@ function Carpinova({ onSignOut, userEmail }) {
         {tab === "obras" && <ObrasTab obras={obras} onOpen={setSelectedId} onNew={() => setNovaObraOpen(true)} />}
         {tab === "producao" && <Producao obras={obras} onOpenObra={setSelectedId} />}
         {tab === "financeiro" && <Financeiro obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} equipa={equipa} onAddMembro={addMembro} onUpdateMembro={updateMembro} onDeleteMembro={deleteMembro} />}
+        {tab === "receitas" && <Receitas obras={obras} onOpenObra={setSelectedId} />}
         {tab === "faturas" && <Faturas obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onOpenObra={setSelectedId} fornecedorNomes={fornecedores.map((f) => f.nome)} />}
         {tab === "clientes" && <Clientes obras={obras} clientes={clientes} onAddCliente={addCliente} onUpdateCliente={updateCliente} onDeleteCliente={deleteCliente} onOpenObra={setSelectedId} />}
         {tab === "fornecedores" && <Fornecedores fornecedores={fornecedores} onAdd={addFornecedor} onUpdate={updateFornecedor} onDelete={deleteFornecedor} despesas={despesas} />}
