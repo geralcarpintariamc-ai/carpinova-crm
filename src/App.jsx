@@ -3324,7 +3324,7 @@ function Receitas({ obras, onOpenObra }) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ background: T.paper3, textAlign: "left" }}>
-              {["Obra", "Cliente", "Descrição", "Valor", "Data", "Método", "Faturado", "Recebido"].map((h) => (
+              {["Obra", "Cliente", "Descrição", "Valor", "Data", "Método", "Faturado", "Recebido", "Por Receber"].map((h) => (
                 <th key={h} style={{ padding: "9px 12px", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: T.walnutDark, whiteSpace: "nowrap" }}>{h}</th>
               ))}
             </tr>
@@ -3353,11 +3353,14 @@ function Receitas({ obras, onOpenObra }) {
                   <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap", opacity: p.pago ? 1 : 0.3 }}>
                     {p.pago ? fmtEUR(p.valor) : "—"}
                   </td>
+                  <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap", opacity: !p.pago ? 1 : 0.3, color: atrasado ? T.rust : "inherit", fontWeight: atrasado ? 700 : 400 }}>
+                    {!p.pago ? fmtEUR(p.valor) : "—"}
+                  </td>
                 </tr>
               );
             })}
             {filtrados.length === 0 && (
-              <tr><td colSpan={8} style={{ padding: 24, textAlign: "center", opacity: 0.5 }}>Sem pagamentos para este filtro.</td></tr>
+              <tr><td colSpan={9} style={{ padding: 24, textAlign: "center", opacity: 0.5 }}>Sem pagamentos para este filtro.</td></tr>
             )}
           </tbody>
         </table>
