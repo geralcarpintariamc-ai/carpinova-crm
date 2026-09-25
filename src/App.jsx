@@ -3267,6 +3267,12 @@ function Receitas({ obras, onOpenObra }) {
 
   const METODO_CORES = [T.walnut, T.navy, T.green, T.amber, "#8A6A1E", T.rust];
 
+  const comparacao = useMemo(() => ([
+    { nome: "Faturado", valor: kpis.totalFaturado, cor: T.navy },
+    { nome: "Recebido", valor: kpis.totalRecebido, cor: T.green },
+    { nome: "Por Receber", valor: kpis.totalPorReceber, cor: T.amber },
+  ]), [kpis]);
+
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 8 }}>
@@ -3276,8 +3282,19 @@ function Receitas({ obras, onOpenObra }) {
         <KpiCard icon={AlertTriangle} label="Por receber, já atrasado" value={fmtEUR(kpis.totalAtrasado)} sub={`${kpis.nAtrasados} pagamento(s)`} accent={kpis.nAtrasados > 0 ? T.rust : T.green} />
       </div>
 
-      <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 8, marginBottom: 16 }}>
-        Faturado e Recebido são coisas independentes — um pagamento pode estar faturado sem ainda ter entrado, ou já ter entrado sem estar faturado. Marca os dois na ficha da obra (secção "Plano de pagamentos").
+      <CutDivider label="Faturado vs. Recebido vs. Por Receber" />
+      <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6, padding: "16px 20px", height: 220, marginBottom: 16 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={comparacao} layout="vertical" margin={{ top: 4, right: 24, left: 8, bottom: 4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={T.line} horizontal={false} />
+            <XAxis type="number" tick={{ fontSize: 11, fontFamily: "Inter" }} tickFormatter={(v) => fmtEUR(v)} />
+            <YAxis type="category" dataKey="nome" tick={{ fontSize: 12, fontFamily: "Inter", fontWeight: 600 }} width={100} />
+            <Tooltip formatter={(v) => fmtEUR(v)} contentStyle={{ fontFamily: "Inter", fontSize: 12, borderRadius: 4, border: `1px solid ${T.line}` }} />
+            <Bar dataKey="valor" radius={[0, 4, 4, 0]}>
+              {comparacao.map((c) => <Cell key={c.nome} fill={c.cor} />)}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
       </div>
 
       {kpis.nAtrasados > 0 && (
@@ -3286,7 +3303,7 @@ function Receitas({ obras, onOpenObra }) {
           background: `${T.rust}18`, border: `1px solid ${T.rust}`, borderRadius: 4, fontSize: 13,
         }}>
           <AlertTriangle size={14} color={T.rust} />
-          Há {kpis.nAtrasados} pagamento(s) por receber com data já passada, totalizando {fmtEUR(kpis.totalAtrasado)} — usa o filtro "Por receber" abaixo para os veres todos.
+          Há {kpis.nAtrasados} pagamento(s) por receber com data já passada, totalizando {fmtEUR(kpis.totalAtrasado)}.
         </div>
       )}
 
@@ -3307,7 +3324,7 @@ function Receitas({ obras, onOpenObra }) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ background: T.paper3, textAlign: "left" }}>
-              {["Obra", "Cliente", "Descrição", "Valor", "Data", "Método", "Estado", "Faturado"].map((h) => (
+              {["Obra", "Cliente", "Descrição", "Valor", "Data", "Método", "Faturado", "Recebido"].map((h) => (
                 <th key={h} style={{ padding: "9px 12px", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: T.walnutDark, whiteSpace: "nowrap" }}>{h}</th>
               ))}
             </tr>
@@ -3330,11 +3347,11 @@ function Receitas({ obras, onOpenObra }) {
                     {p.data ? fmtDate(p.data) : "—"}
                   </td>
                   <td style={{ padding: "8px 12px" }}>{p.metodo || "—"}</td>
-                  <td style={{ padding: "8px 12px" }}>
-                    <Tag color={p.pago ? T.green : (atrasado ? T.rust : T.amber)}>{p.pago ? "Recebido" : atrasado ? "Atrasado" : "Por receber"}</Tag>
+                  <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap", opacity: p.faturaEmitida ? 1 : 0.3 }}>
+                    {p.faturaEmitida ? fmtEUR(p.valor) : "—"}
                   </td>
-                  <td style={{ padding: "8px 12px", textAlign: "center" }}>
-                    {p.faturaEmitida ? <CheckCircle2 size={15} color={T.green} /> : <span style={{ opacity: 0.3 }}>—</span>}
+                  <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap", opacity: p.pago ? 1 : 0.3 }}>
+                    {p.pago ? fmtEUR(p.valor) : "—"}
                   </td>
                 </tr>
               );
