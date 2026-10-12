@@ -5,7 +5,7 @@ import {
   Package, CheckCircle2, XCircle, Clock, Download, Building2, ChevronDown,
   ChevronRight, ChevronUp, MapPin, Euro, FileText, Users, LayoutGrid, Table as TableIcon,
   Wallet, Wrench, ArrowRight, Trash2, Save, RotateCcw, Globe, Upload, Paperclip,
-  FileSpreadsheet, Image as ImageIcon, FileType, Receipt, Banknote, Landmark
+  FileSpreadsheet, Image as ImageIcon, FileType, Receipt, Banknote, Landmark, Check, Eye
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -803,8 +803,24 @@ function useEmailsStore() {
     }
   }, []);
 
-  return { emails, updateEmail };
+  const updateEmails = useCallback((ids, patch) => {
+    const set = new Set(ids);
+    const next = eRef.current.map((e) => (set.has(e.id) ? { ...e, ...patch } : e));
+    eRef.current = next;
+    setEmails(next);
+    const rows = next.filter((e) => set.has(e.id)).map((e) => ({ id: e.id, payload: e, updated_at: new Date().toISOString() }));
+    if (rows.length) {
+      supabase.from("emails").upsert(rows, { onConflict: "id" })
+        .then(({ error }) => { if (error) console.error("Erro a gravar emails:", error); });
+    }
+  }, []);
+
+  return { emails, updateEmail, updateEmails };
 }
+
+/* Um email enviado por nós conta como lido. Não lido = recebido e ainda não aberto. */
+const emailNaoLido = (e) => !e.lido && e.direcao !== "saida" && e.estado !== "ignorado" && !e.resolvido;
+const emailPorTratar = (e) => !e.resolvido && e.estado !== "ignorado";
 
 /* ============================================================
    PEQUENOS COMPONENTES
@@ -3747,20 +3763,25 @@ function EmailItem({ email, obras, onUpdate, onCriarObra, mostrarObra = true }) 
   const opcoes = useMemo(() => [...obras].sort((a, b) => (b.dataEntrada || "").localeCompare(a.dataEntrada || "")), [obras]);
   return (
     <div style={{
-      background: email.estado === "novo" ? "rgba(200,138,26,0.08)" : T.paper2,
-      border: `1px solid ${email.estado === "novo" ? T.amber : T.line}`, borderRadius: 6, fontSize: 13, minWidth: 0,
+      background: emailNaoLido(email) ? "rgba(200,138,26,0.08)" : T.paper2,
+      border: `1px solid ${emailNaoLido(email) ? T.amber : T.line}`, borderRadius: 6, fontSize: 13, minWidth: 0,
+      opacity: email.resolvido ? 0.6 : 1,
     }}>
-      <button onClick={() => setAberto((v) => !v)} style={{
+      <button onClick={() => { const abrir = !aberto; setAberto(abrir); if (abrir && !email.lido) onUpdate(email.id, { lido: true }); }} style={{
         display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", background: "none", border: "none",
         padding: "9px 12px", cursor: "pointer", color: T.ink, fontFamily: "Inter", minWidth: 0,
       }}>
         {aberto ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email.assunto || "(sem assunto)"}</div>
+          <div style={{ fontWeight: emailNaoLido(email) ? 700 : 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {emailNaoLido(email) && <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: T.amber, marginRight: 7 }} />}
+            {email.assunto || "(sem assunto)"}
+          </div>
           <div style={{ fontSize: 11.5, opacity: 0.65, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {saida ? `Para ${(email.para || []).join(", ")}` : `De ${email.de || email.deEmail}`} · {fmtDataHora(email.data)}
           </div>
         </div>
+        {email.resolvido && <Tag color={T.green}>Resolvido</Tag>}
         <Tag color={saida ? T.navy : T.green}>{saida ? "Enviado" : "Recebido"}</Tag>
         {(email.anexos || []).length > 0 && <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11.5, opacity: 0.7 }}><Paperclip size={12} />{email.anexos.length}</span>}
         {mostrarObra && obra && <Tag color={T.walnut}>{obra.ref || obra.projeto}</Tag>}
@@ -3789,6 +3810,10 @@ function EmailItem({ email, obras, onUpdate, onCriarObra, mostrarObra = true }) 
                 {opcoes.map((o) => <option key={o.id} value={o.id}>{(o.ref || "s/ ref")} · {o.projeto} · {o.cliente}</option>)}
               </select>
             )}
+            {!email.resolvido
+              ? <Btn small icon={Check} onClick={() => onUpdate(email.id, { resolvido: true, lido: true, dataResolvido: new Date().toISOString() })}>Marcar resolvido</Btn>
+              : <Btn small variant="ghost" icon={RotateCcw} onClick={() => onUpdate(email.id, { resolvido: false, dataResolvido: null })}>Reabrir</Btn>}
+            {email.lido && !saida && <Btn small variant="ghost" icon={Eye} onClick={() => onUpdate(email.id, { lido: false })}>Marcar como não lido</Btn>}
             {!email.obraId && onCriarObra && <Btn small icon={Plus} onClick={() => onCriarObra(email)}>Criar obra com este email</Btn>}
             {email.obraId && !mostrarObra && (
               <Btn small variant="ghost" onClick={() => onUpdate(email.id, { obraId: null, estado: "novo", ligadoPor: null })}>Desligar desta obra</Btn>
@@ -3808,13 +3833,15 @@ function EmailItem({ email, obras, onUpdate, onCriarObra, mostrarObra = true }) 
   );
 }
 
-function EmailsTab({ emails, obras, onUpdate, onCriarObra }) {
-  const [filtro, setFiltro] = useState("novos"); // novos | todos | ligados | ignorados
+function EmailsTab({ emails, obras, onUpdate, onUpdateMany, onCriarObra }) {
+  const [filtro, setFiltro] = useState("tratar"); // tratar | naolidos | resolvidos | ligados | ignorados | todos
   const [q, setQ] = useState("");
   const lista = useMemo(() => {
     return [...emails]
       .filter((e) => {
-        if (filtro === "novos") return e.estado === "novo";
+        if (filtro === "tratar") return emailPorTratar(e);
+        if (filtro === "naolidos") return emailNaoLido(e);
+        if (filtro === "resolvidos") return !!e.resolvido;
         if (filtro === "ligados") return e.estado === "ligado";
         if (filtro === "ignorados") return e.estado === "ignorado";
         return true;
@@ -3822,11 +3849,13 @@ function EmailsTab({ emails, obras, onUpdate, onCriarObra }) {
       .filter((e) => !q || `${e.assunto} ${e.de} ${e.deEmail} ${e.texto}`.toLowerCase().includes(q.toLowerCase()))
       .sort((a, b) => (b.data || "").localeCompare(a.data || ""));
   }, [emails, filtro, q]);
-  const nNovos = emails.filter((e) => e.estado === "novo").length;
+  const nNaoLidos = emails.filter(emailNaoLido).length;
+  const nPorTratar = emails.filter(emailPorTratar).length;
+  const idsNaoLidos = lista.filter(emailNaoLido).map((e) => e.id);
   return (
     <div>
       <div style={{ fontSize: 13, opacity: 0.7, marginBottom: 14 }}>
-        Só entram aqui os emails de cotação e orçamento (recebidos e enviados). Nada se liga sozinho: quando o assunto tem o número de uma obra, ou o email é o de um cliente, aparece uma sugestão que confirmas com um clique.
+        Só entram aqui os emails de cotação e orçamento (recebidos e enviados). Abrir um email marca-o como lido; quando o pedido estiver tratado, marca-o como resolvido e ele sai da lista "Por tratar". Nada se liga sozinho: quando o assunto tem o número de uma obra, ou o email é o de um cliente, aparece uma sugestão que confirmas com um clique.
       </div>
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
         <div style={{ position: "relative", flex: "1 1 240px" }}>
@@ -3834,11 +3863,16 @@ function EmailsTab({ emails, obras, onUpdate, onCriarObra }) {
           <input style={{ ...inputStyle, width: "100%", paddingLeft: 28 }} placeholder="Pesquisar assunto, remetente, texto…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
         <select style={selectStyle} value={filtro} onChange={(e) => setFiltro(e.target.value)}>
-          <option value="novos">Por classificar ({nNovos})</option>
+          <option value="tratar">Por tratar ({nPorTratar})</option>
+          <option value="naolidos">Não lidos ({nNaoLidos})</option>
+          <option value="resolvidos">Resolvidos</option>
           <option value="ligados">Ligados a obras</option>
           <option value="ignorados">Ignorados</option>
           <option value="todos">Todos</option>
         </select>
+        {idsNaoLidos.length > 0 && onUpdateMany && (
+          <Btn small variant="ghost" icon={Eye} onClick={() => onUpdateMany(idsNaoLidos, { lido: true })}>Marcar estes como lidos</Btn>
+        )}
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {lista.map((e) => <EmailItem key={e.id} email={e} obras={obras} onUpdate={onUpdate} onCriarObra={onCriarObra} />)}
@@ -3927,9 +3961,9 @@ function Carpinova({ onSignOut, userEmail }) {
   const { despesas, addDespesa, updateDespesa, deleteDespesa } = useDespesasStore();
   const { clientes, addCliente, updateCliente, deleteCliente, syncCliente } = useClientesStore();
   const { equipa, addMembro, updateMembro, deleteMembro } = useEquipaStore();
-  const { emails, updateEmail } = useEmailsStore();
+  const { emails, updateEmail, updateEmails } = useEmailsStore();
   const [emailParaObra, setEmailParaObra] = useState(null);
-  const emailsNovos = emails.filter((e) => e.estado === "novo").length;
+  const emailsNovos = emails.filter(emailNaoLido).length;
   const clientesNomesUnicos = useMemo(() => {
     const set = new Set();
     clientes.forEach((c) => c.nome && set.add(c.nome));
@@ -4040,7 +4074,7 @@ function Carpinova({ onSignOut, userEmail }) {
         {tab === "painel" && <Painel obras={obras} onOpen={setSelectedId} />}
         {tab === "pipeline" && <Pipeline obras={obras} onOpen={setSelectedId} onChangeEstado={changeEstado} />}
         {tab === "obras" && <ObrasTab obras={obras} onOpen={setSelectedId} onNew={() => setNovaObraOpen(true)} />}
-        {tab === "emails" && <EmailsTab emails={emails} obras={obras} onUpdate={updateEmail} onCriarObra={(em) => { setEmailParaObra(em); setNovaObraOpen(true); }} />}
+        {tab === "emails" && <EmailsTab emails={emails} obras={obras} onUpdate={updateEmail} onUpdateMany={updateEmails} onCriarObra={(em) => { setEmailParaObra(em); setNovaObraOpen(true); }} />}
         {tab === "producao" && <Producao obras={obras} onOpenObra={setSelectedId} />}
         {tab === "financeiro" && <Financeiro obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} equipa={equipa} onAddMembro={addMembro} onUpdateMembro={updateMembro} onDeleteMembro={deleteMembro} />}
         {tab === "receitas" && <Receitas obras={obras} onOpenObra={setSelectedId} />}
