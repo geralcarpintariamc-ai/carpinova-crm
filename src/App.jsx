@@ -862,8 +862,7 @@ function useEmailsStore() {
 
 /* ---------- Separador do browser: ícone + número de emails por ler ----------
    O ícone é o ficheiro public/logo.png do repositório (se existir); senão
-   desenha um "C" castanho. Com emails por ler, aparece uma bolinha vermelha
-   com o número no ícone e "(n)" no título do separador. */
+   desenha um "C" castanho. Com emails por ler, o título passa a "(n) Carpinova CRM". */
 function useAvisoSeparador(n) {
   const logoRef = useRef(undefined); // undefined = por carregar, null = não existe
   const desenhar = useCallback((img) => {
@@ -874,11 +873,6 @@ function useAvisoSeparador(n) {
       else {
         g.fillStyle = T.walnut; g.beginPath(); g.roundRect(0, 0, 64, 64, 14); g.fill();
         g.fillStyle = "#fff"; g.font = "bold 40px Georgia, serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("C", 32, 35);
-      }
-      if (n > 0) {
-        g.fillStyle = "#D32F2F"; g.beginPath(); g.arc(46, 18, 18, 0, Math.PI * 2); g.fill();
-        g.fillStyle = "#fff"; g.font = "bold 22px Arial, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
-        g.fillText(n > 9 ? "9+" : String(n), 46, 19);
       }
       let link = document.querySelector("link[rel~='icon']");
       if (!link) { link = document.createElement("link"); link.rel = "icon"; document.head.appendChild(link); }
