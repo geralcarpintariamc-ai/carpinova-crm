@@ -228,6 +228,46 @@ const fmtDate = (d) => {
   return dt.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit", year: "numeric" });
 };
 const todayISO = () => new Date().toISOString().slice(0, 10);
+/* ---------- Lembretes de seguimento (automáticos) ----------
+   Uma obra numa destas fases, sem ação agendada à mão, aparece como lembrete
+   quando passam X dias sem "toque": entrada na fase, email ligado à obra
+   (enviado ou recebido) ou um "Já contactei" registado no histórico. */
+const SEGUIMENTO_DIAS = { orcamentar: 7, entregue: 10, retificacao: 7, em_estudo: 7 }; // dias ÚTEIS
+/* Dias úteis (seg–sex) entre duas datas ISO: conta os dias depois de a, até b inclusive. */
+const diasEntre = (aISO, bISO) => {
+  const a = new Date(aISO + "T00:00:00"), b = new Date(bISO + "T00:00:00");
+  if (isNaN(a) || isNaN(b) || b <= a) return 0;
+  let n = 0;
+  for (const d = new Date(a); d < b; ) {
+    d.setDate(d.getDate() + 1);
+    const w = d.getDay();
+    if (w !== 0 && w !== 6) n++;
+  }
+  return n;
+};
+function seguimentosPendentes(obras, emails = []) {
+  const hoje = todayISO();
+  const out = [];
+  obras.forEach((o) => {
+    const limite = SEGUIMENTO_DIAS[o.estado];
+    if (!limite || o.proximaAcaoData) return;
+    const label = stageOf(o.estado).label;
+    const hist = o.historico || [];
+    let toque = o.dataEntrada || "";
+    hist.forEach((h) => {
+      const t = h.texto || "";
+      if ((t.endsWith(`→ ${label}.`) || t.startsWith("Seguimento")) && h.data > toque) toque = h.data;
+    });
+    emails.forEach((e) => {
+      if (e.obraId === o.id && e.data) { const d = String(e.data).slice(0, 10); if (d > toque) toque = d; }
+    });
+    if (!toque) return;
+    const dias = diasEntre(toque, hoje);
+    if (dias >= limite) out.push({ obra: o, dias, desde: toque });
+  });
+  return out.sort((a, b) => b.dias - a.dias);
+}
+
 const isOverdue = (dateStr, estado) => {
   if (!dateStr) return false;
   if (["concluido", ...REJECTED_KEYS].includes(estado)) return false;
@@ -1731,7 +1771,8 @@ function NovaObraModal({ onClose, onCreate, suggestedRef, clientesNomes, refsExi
 /* ============================================================
    PAINEL (DASHBOARD)
    ============================================================ */
-function Painel({ obras, onOpen }) {
+function Painel({ obras, onOpen, emails = [], onAddHistorico }) {
+  const seguimentos = useMemo(() => seguimentosPendentes(obras, emails), [obras, emails]);
   const kpis = useMemo(() => {
     const emPipeline = obras.filter((o) => ACTIVE_KEYS.includes(o.estado));
     const valorPipeline = emPipeline.reduce((s, o) => s + (Number(o.valorOrcamento) || 0), 0);
@@ -1786,6 +1827,29 @@ function Painel({ obras, onOpen }) {
           </BarChart>
         </ResponsiveContainer>
       </div>
+
+      {seguimentos.length > 0 && (
+        <>
+          <CutDivider label={`Para dar seguimento (${seguimentos.length})`} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 20 }}>
+            {seguimentos.slice(0, 12).map(({ obra: o, dias }) => (
+              <div key={o.id} onClick={() => onOpen(o.id)} style={{
+                display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", flexWrap: "wrap",
+                background: "rgba(200,138,26,0.08)", border: `1px solid ${T.amber}`, borderRadius: 4, cursor: "pointer", fontSize: 13,
+              }}>
+                <Clock size={15} color={T.amber} />
+                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, opacity: 0.75, minWidth: 64 }}>{dias} dias úteis</span>
+                <span style={{ fontWeight: 600 }}>{o.projeto}</span>
+                <span style={{ opacity: 0.6 }}>— {o.cliente}</span>
+                <Tag color={stageOf(o.estado).color}>{stageOf(o.estado).label}</Tag>
+                <span style={{ marginLeft: "auto" }} onClick={(e) => e.stopPropagation()}>
+                  {onAddHistorico && <Btn small icon={Check} onClick={() => onAddHistorico(o.id, "Seguimento: cliente contactado.")}>Já contactei</Btn>}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       <CutDivider label="Próximas ações" />
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -3755,6 +3819,45 @@ const fmtDataHora = (iso) => {
   return isNaN(d) ? iso : d.toLocaleString("pt-PT", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 };
 
+function ObraPicker({ obras, value, onChange }) {
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const atual = obras.find((o) => o.id === value);
+  const rotulo = (o) => `${o.ref || "s/ ref"} · ${o.projeto || ""} · ${o.cliente || ""}`;
+  const lista = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    return obras.filter((o) => !t || `${o.ref} ${o.projeto} ${o.cliente}`.toLowerCase().includes(t)).slice(0, 40);
+  }, [obras, q]);
+  const escolher = (id) => { onChange(id); setOpen(false); setQ(""); };
+  return (
+    <div style={{ position: "relative", minWidth: 260, maxWidth: 340, flex: "1 1 260px" }}>
+      <input
+        style={{ ...inputStyle, width: "100%", fontSize: 12 }}
+        placeholder={atual ? rotulo(atual) : "Ligar a uma obra… (escreve para pesquisar)"}
+        value={open ? q : ""}
+        onFocus={() => setOpen(true)}
+        onChange={(e) => { setQ(e.target.value); setOpen(true); }}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onKeyDown={(e) => { if (e.key === "Enter" && lista.length > 0) { e.preventDefault(); escolher(lista[0].id); } if (e.key === "Escape") setOpen(false); }}
+      />
+      {open && (
+        <div style={{
+          position: "absolute", zIndex: 30, top: "100%", left: 0, right: 0, marginTop: 2, maxHeight: 260, overflowY: "auto",
+          background: "#fff", border: `1px solid ${T.line}`, borderRadius: 4, boxShadow: "0 4px 14px rgba(0,0,0,0.15)",
+        }}>
+          {value && <div onMouseDown={() => escolher("")} style={{ padding: "7px 10px", fontSize: 12, cursor: "pointer", color: T.rust, borderBottom: `1px solid ${T.line}` }}>Desligar da obra</div>}
+          {lista.map((o) => (
+            <div key={o.id} onMouseDown={() => escolher(o.id)} style={{ padding: "7px 10px", fontSize: 12, cursor: "pointer", borderBottom: `1px solid ${T.line}`, background: o.id === value ? "rgba(200,138,26,0.12)" : "transparent" }}>
+              {rotulo(o)}
+            </div>
+          ))}
+          {lista.length === 0 && <div style={{ padding: "8px 10px", fontSize: 12, opacity: 0.6 }}>Nenhuma obra encontrada.</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EmailItem({ email, obras, onUpdate, onCriarObra, mostrarObra = true }) {
   const [aberto, setAberto] = useState(false);
   const obra = obras.find((o) => o.id === email.obraId);
@@ -3804,11 +3907,8 @@ function EmailItem({ email, obras, onUpdate, onCriarObra, mostrarObra = true }) 
           )}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             {mostrarObra && (
-              <select style={{ ...selectStyle, maxWidth: 280, fontSize: 12 }} value={email.obraId || ""}
-                onChange={(e) => onUpdate(email.id, e.target.value ? { obraId: e.target.value, estado: "ligado", ligadoPor: "manual" } : { obraId: null, estado: "novo", ligadoPor: null })}>
-                <option value="">— Ligar a uma obra… —</option>
-                {opcoes.map((o) => <option key={o.id} value={o.id}>{(o.ref || "s/ ref")} · {o.projeto} · {o.cliente}</option>)}
-              </select>
+              <ObraPicker obras={opcoes} value={email.obraId || ""}
+                onChange={(id) => onUpdate(email.id, id ? { obraId: id, estado: "ligado", ligadoPor: "manual" } : { obraId: null, estado: "novo", ligadoPor: null })} />
             )}
             {!email.resolvido
               ? <Btn small icon={Check} onClick={() => onUpdate(email.id, { resolvido: true, lido: true, dataResolvido: new Date().toISOString() })}>Marcar resolvido</Btn>
@@ -3964,6 +4064,7 @@ function Carpinova({ onSignOut, userEmail }) {
   const { emails, updateEmail, updateEmails } = useEmailsStore();
   const [emailParaObra, setEmailParaObra] = useState(null);
   const emailsNovos = emails.filter(emailNaoLido).length;
+  const nSeguimentos = useMemo(() => seguimentosPendentes(obras, emails).length, [obras, emails]);
   const clientesNomesUnicos = useMemo(() => {
     const set = new Set();
     clientes.forEach((c) => c.nome && set.add(c.nome));
@@ -4061,6 +4162,9 @@ function Carpinova({ onSignOut, userEmail }) {
               fontWeight: active ? 700 : 500, fontSize: 13, cursor: "pointer", whiteSpace: "nowrap",
             }}>
               <Icon size={15} /> {t.label}
+              {t.key === "painel" && nSeguimentos > 0 && (
+                <span style={{ background: T.amber, color: "#fff", borderRadius: 10, fontSize: 10.5, fontWeight: 700, padding: "1px 6px" }}>{nSeguimentos}</span>
+              )}
               {t.key === "emails" && emailsNovos > 0 && (
                 <span style={{ background: T.rust, color: "#fff", borderRadius: 10, fontSize: 10.5, fontWeight: 700, padding: "1px 6px" }}>{emailsNovos}</span>
               )}
@@ -4071,7 +4175,7 @@ function Carpinova({ onSignOut, userEmail }) {
 
       {/* Content */}
       <div style={{ padding: "24px", maxWidth: tab === "pipeline" ? "none" : 1200, margin: "0 auto" }}>
-        {tab === "painel" && <Painel obras={obras} onOpen={setSelectedId} />}
+        {tab === "painel" && <Painel obras={obras} onOpen={setSelectedId} emails={emails} onAddHistorico={addHistorico} />}
         {tab === "pipeline" && <Pipeline obras={obras} onOpen={setSelectedId} onChangeEstado={changeEstado} />}
         {tab === "obras" && <ObrasTab obras={obras} onOpen={setSelectedId} onNew={() => setNovaObraOpen(true)} />}
         {tab === "emails" && <EmailsTab emails={emails} obras={obras} onUpdate={updateEmail} onUpdateMany={updateEmails} onCriarObra={(em) => { setEmailParaObra(em); setNovaObraOpen(true); }} />}
