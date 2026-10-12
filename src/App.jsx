@@ -256,22 +256,34 @@ function followupsFeitos(o) {
   hist.forEach((h, i) => { if ((h.texto || "").startsWith("Estado alterado")) desde = i; });
   return hist.slice(desde + 1).filter((h) => (h.texto || "").startsWith("Seguimento: cliente contactado")).length;
 }
+/* Último "toque" com o cliente: entrada na fase, email ligado à obra ou follow-up registado. */
+function ultimoToque(o, emails = []) {
+  const label = stageOf(o.estado).label;
+  let toque = o.dataEntrada || "";
+  (o.historico || []).forEach((h) => {
+    const t = h.texto || "";
+    if ((t.endsWith(`→ ${label}.`) || t.startsWith("Seguimento")) && h.data > toque) toque = h.data;
+  });
+  emails.forEach((e) => {
+    if (e.obraId === o.id && e.data) { const d = String(e.data).slice(0, 10); if (d > toque) toque = d; }
+  });
+  return toque;
+}
+/* Soma n dias úteis (seg–sex) a uma data ISO. */
+function addDiasUteis(iso, n) {
+  const d = new Date(iso + "T00:00:00");
+  if (isNaN(d)) return "";
+  let k = 0;
+  while (k < n) { d.setDate(d.getDate() + 1); const w = d.getDay(); if (w !== 0 && w !== 6) k++; }
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 function seguimentosPendentes(obras, emails = []) {
   const hoje = todayISO();
   const out = [];
   obras.forEach((o) => {
     const limite = SEGUIMENTO_DIAS[o.estado];
     if (!limite || o.proximaAcaoData) return;
-    const label = stageOf(o.estado).label;
-    const hist = o.historico || [];
-    let toque = o.dataEntrada || "";
-    hist.forEach((h) => {
-      const t = h.texto || "";
-      if ((t.endsWith(`→ ${label}.`) || t.startsWith("Seguimento")) && h.data > toque) toque = h.data;
-    });
-    emails.forEach((e) => {
-      if (e.obraId === o.id && e.data) { const d = String(e.data).slice(0, 10); if (d > toque) toque = d; }
-    });
+    const toque = ultimoToque(o, emails);
     if (!toque) return;
     const dias = diasEntre(toque, hoje);
     if (dias >= limite) out.push({ obra: o, dias, desde: toque });
@@ -1034,6 +1046,76 @@ function Btn({ children, onClick, variant = "primary", icon: Icon, small, type =
 /* ============================================================
    MODAL — DETALHE DA OBRA
    ============================================================ */
+/* Bloco "Seguimento do orçamento" na ficha da obra: ver e alterar follow-ups, lembrete previsto e arquivo. */
+function SeguimentoObra({ obra, emails, onPatch, onEstado }) {
+  const [dataNovo, setDataNovo] = useState(todayISO());
+  const limite = SEGUIMENTO_DIAS[obra.estado];
+  const hist = obra.historico || [];
+  if (!limite && obra.estado !== "sem_resposta") return null;
+
+  // índices dos follow-ups feitos desde a última mudança de fase
+  let desde = -1;
+  hist.forEach((h, i) => { if ((h.texto || "").startsWith("Estado alterado")) desde = i; });
+  const followups = [];
+  hist.forEach((h, i) => { if (i > desde && (h.texto || "").startsWith("Seguimento: cliente contactado")) followups.push({ i, data: h.data }); });
+  const dataFase = desde >= 0 ? hist[desde].data : (obra.dataEntrada || "");
+
+  const hoje = todayISO();
+  const toque = limite ? ultimoToque(obra, emails.filter((e) => e.obraId === obra.id)) : "";
+  const proximo = limite && !obra.proximaAcaoData && toque ? addDiasUteis(toque, limite) : "";
+  const atraso = proximo && proximo < hoje ? diasEntre(proximo, hoje) : 0;
+
+  const registar = () => onPatch({ historico: [...hist, { data: dataNovo || hoje, texto: "Seguimento: cliente contactado." }] });
+  const adiar = () => onPatch({ historico: [...hist, { data: hoje, texto: "Seguimento: lembrete adiado." }] });
+  const mudarData = (i, data) => onPatch({ historico: hist.map((h, k) => (k === i ? { ...h, data } : h)) });
+  const remover = (i) => onPatch({ historico: hist.filter((_, k) => k !== i) });
+
+  return (
+    <>
+      <CutDivider label="Seguimento do orçamento" />
+      <div style={{ background: obra.estado === "sem_resposta" ? "rgba(122,127,135,0.12)" : "rgba(200,138,26,0.07)", border: `1px solid ${obra.estado === "sem_resposta" ? "#7A7F87" : T.amber}`, borderRadius: 6, padding: 14, display: "flex", flexDirection: "column", gap: 10, fontSize: 13 }}>
+        {obra.estado === "sem_resposta" ? (
+          <>
+            <div>Arquivado como <b>Sem resposta</b> desde <b>{fmtDate(dataFase)}</b>. Não gera lembretes nem conta no valor do pipeline.</div>
+            <div><Btn small icon={RotateCcw} onClick={() => onEstado("em_estudo")}>Reativar (voltar a Em Estudo)</Btn></div>
+          </>
+        ) : (
+          <>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 22px" }}>
+              <span>Na fase <b>{stageOf(obra.estado).label}</b> desde <b>{fmtDate(dataFase)}</b></span>
+              <span>Follow-ups feitos: <b>{followups.length}</b></span>
+              {proximo && <span>Próximo lembrete: <b style={{ color: atraso ? T.rust : "inherit" }}>{fmtDate(proximo)}</b>{atraso ? ` (em atraso há ${atraso} dias úteis)` : ""}</span>}
+              {obra.proximaAcaoData && <span style={{ opacity: 0.7 }}>Tem uma próxima ação agendada à mão, por isso não há lembrete automático.</span>}
+            </div>
+            {followups.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {followups.map((f, n) => (
+                  <div key={f.i} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ minWidth: 92 }}>{n + 1}.º follow-up</span>
+                    <input type="date" style={{ ...inputStyle, width: 150 }} value={f.data || ""} onChange={(e) => mudarData(f.i, e.target.value)} />
+                    <Btn small variant="ghost" icon={Trash2} onClick={() => remover(f.i)}>Remover</Btn>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              {obra.estado === "orcamentar" ? (
+                <Btn small variant="ghost" icon={Clock} onClick={adiar}>Adiar lembrete</Btn>
+              ) : (
+                <>
+                  <input type="date" style={{ ...inputStyle, width: 150 }} value={dataNovo} onChange={(e) => setDataNovo(e.target.value)} />
+                  <Btn small icon={Check} onClick={registar}>Registar follow-up</Btn>
+                  <Btn small variant={followups.length >= 1 ? "primary" : "ghost"} onClick={() => onEstado("sem_resposta")}>Enviei email de arquivo → Sem resposta</Btn>
+                </>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
 function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChangeEstado, onAddHistorico, onDelete, fornecedorNomes, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespesa, onSyncCliente, clientesNomes, equipa }) {
   const [local, setLocal] = useState(obra);
   const [novaNota, setNovaNota] = useState("");
@@ -1222,14 +1304,25 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
     if (error) console.error("Erro a remover fatura do storage:", error);
   };
 
-  const gerarPagamentos = () => {
+  // Esquemas de pagamento disponíveis. A última prestação absorve os cêntimos de arredondamento.
+  const ESQUEMAS_PAGAMENTO = [
+    { key: "40-40-20", label: "40/40/20", partes: [["Adjudicação", 40], ["Início de obra", 40], ["Conclusão", 20]] },
+    { key: "40-20-20-20", label: "40/20/20/20", partes: [["Adjudicação", 40], ["Início de obra", 20], ["A meio da obra", 20], ["Conclusão", 20]] },
+    { key: "50-50", label: "50/50", partes: [["Adjudicação", 50], ["Conclusão", 50]] },
+  ];
+  const gerarPagamentos = (esquema) => {
     if (valorRefObra === null) return;
+    const temPagos = (local.pagamentos || []).some((p) => p.pago);
+    if (temPagos) return;
+    if ((local.pagamentos || []).length > 0 && !window.confirm(`Substituir o plano de pagamentos atual por ${esquema.label}? As datas e métodos já preenchidos perdem-se.`)) return;
     const v = valorRefObra * fatorIva(local); // plano com IVA incluído
-    const pagamentos = [
-      { label: "Adjudicação (40%)", valor: +(v * 0.4).toFixed(2), data: "", pago: false, metodo: "", faturaEmitida: false },
-      { label: "Início de obra (40%)", valor: +(v * 0.4).toFixed(2), data: "", pago: false, metodo: "", faturaEmitida: false },
-      { label: "Conclusão (20%)", valor: +(v * 0.2).toFixed(2), data: "", pago: false, metodo: "", faturaEmitida: false },
-    ];
+    let acumulado = 0;
+    const pagamentos = esquema.partes.map(([nome, pct], i) => {
+      const ultimo = i === esquema.partes.length - 1;
+      const valor = ultimo ? +(v - acumulado).toFixed(2) : +(v * pct / 100).toFixed(2);
+      acumulado += valor;
+      return { label: `${nome} (${pct}%)`, valor, data: "", pago: false, metodo: "", faturaEmitida: false };
+    });
     commit({ pagamentos });
   };
 
@@ -1567,8 +1660,11 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
             <div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: T.walnutDark, textTransform: "uppercase", letterSpacing: 0.4 }}>Plano de pagamentos (com IVA)</span>
-                {(!local.pagamentos || !local.pagamentos.length) && valorRefObra !== null && (
-                  <Btn small variant="ghost" onClick={gerarPagamentos}>Gerar 40/40/20</Btn>
+                {valorRefObra !== null && !(local.pagamentos || []).some((p) => p.pago) && (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                    <span style={{ fontSize: 11.5, opacity: 0.6 }}>{(local.pagamentos || []).length ? "Refazer plano:" : "Gerar:"}</span>
+                    {ESQUEMAS_PAGAMENTO.map((e) => <Btn key={e.key} small variant="ghost" onClick={() => gerarPagamentos(e)}>{e.label}</Btn>)}
+                  </div>
                 )}
               </div>
               {local.pagamentos && local.pagamentos.length > 0 ? (
@@ -1738,6 +1834,8 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
               <input type="date" style={inputStyle} value={local.proximaAcaoData || ""} onChange={(e) => commit({ proximaAcaoData: e.target.value })} />
             </Field>
           </div>
+
+          <SeguimentoObra obra={local} emails={emails} onPatch={commit} onEstado={handleEstadoChange} />
 
           <CutDivider label="Histórico de contactos" />
           <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 180, overflowY: "auto" }}>
