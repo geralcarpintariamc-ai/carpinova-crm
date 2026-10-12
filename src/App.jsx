@@ -48,6 +48,10 @@ const STAGES = [
   { key: "concluido", label: "Concluído", color: "#3D4F44" },
   { key: "rejeitado_nos", label: "Rejeitado por Nós", color: "#8A7A6B" },
   { key: "rejeitado_cliente", label: "Rejeitado pelo Cliente", color: T.rust },
+  // Cliente que não respondeu ao orçamento nem ao follow-up. Fica arquivado:
+  // não conta para o valor do pipeline (não está em ACTIVE_KEYS) nem para a
+  // taxa de conversão (não está em LOST_KEYS). Reativa-se arrastando para outra fase.
+  { key: "sem_resposta", label: "Sem resposta", color: "#7A7F87" },
 ];
 const stageOf = (key) => STAGES.find((s) => s.key === key) || STAGES[0];
 // "Aceite" = o cliente disse que sim, mas ainda não há dinheiro entrado.
@@ -245,6 +249,13 @@ const diasEntre = (aISO, bISO) => {
   }
   return n;
 };
+/* Quantos follow-ups já foram feitos nesta fase (conta desde a última mudança de fase). */
+function followupsFeitos(o) {
+  const hist = o.historico || [];
+  let desde = -1;
+  hist.forEach((h, i) => { if ((h.texto || "").startsWith("Estado alterado")) desde = i; });
+  return hist.slice(desde + 1).filter((h) => (h.texto || "").startsWith("Seguimento: cliente contactado")).length;
+}
 function seguimentosPendentes(obras, emails = []) {
   const hoje = todayISO();
   const out = [];
@@ -270,7 +281,7 @@ function seguimentosPendentes(obras, emails = []) {
 
 const isOverdue = (dateStr, estado) => {
   if (!dateStr) return false;
-  if (["concluido", ...REJECTED_KEYS].includes(estado)) return false;
+  if (["concluido", "sem_resposta", ...REJECTED_KEYS].includes(estado)) return false;
   return dateStr < todayISO();
 };
 const monthLabel = (isoMonth) => {
@@ -1823,7 +1834,7 @@ function NovaObraModal({ onClose, onCreate, suggestedRef, clientesNomes, refsExi
 /* ============================================================
    PAINEL (DASHBOARD)
    ============================================================ */
-function Painel({ obras, onOpen, emails = [], onAddHistorico }) {
+function Painel({ obras, onOpen, emails = [], onAddHistorico, onChangeEstado }) {
   const seguimentos = useMemo(() => seguimentosPendentes(obras, emails), [obras, emails]);
   const kpis = useMemo(() => {
     const emPipeline = obras.filter((o) => ACTIVE_KEYS.includes(o.estado));
@@ -1839,7 +1850,7 @@ function Painel({ obras, onOpen, emails = [], onAddHistorico }) {
 
   const acoesPendentes = useMemo(() => {
     return obras
-      .filter((o) => o.proximaAcaoData && !["concluido", ...REJECTED_KEYS].includes(o.estado))
+      .filter((o) => o.proximaAcaoData && !["concluido", "sem_resposta", ...REJECTED_KEYS].includes(o.estado))
       .sort((a, b) => (a.proximaAcaoData || "").localeCompare(b.proximaAcaoData || ""))
       .slice(0, 8);
   }, [obras]);
@@ -1895,10 +1906,13 @@ function Painel({ obras, onOpen, emails = [], onAddHistorico }) {
                 <span style={{ opacity: 0.6 }}>— {o.cliente}</span>
                 <Tag color={stageOf(o.estado).color}>{stageOf(o.estado).label}</Tag>
                 {o.estado === "orcamentar" && <span style={{ fontSize: 12, opacity: 0.7 }}>orçamento por fazer</span>}
+                {o.estado !== "orcamentar" && followupsFeitos(o) >= 1 && <span style={{ fontSize: 12, opacity: 0.7 }}>1.º follow-up feito, falta o email de arquivo</span>}
                 <span style={{ marginLeft: "auto" }} onClick={(e) => e.stopPropagation()}>
-                  {onAddHistorico && (o.estado === "orcamentar"
-                    ? <Btn small variant="ghost" icon={Clock} onClick={() => onAddHistorico(o.id, "Seguimento: lembrete adiado (orçamento ainda em preparação).")}>Adiar</Btn>
-                    : <Btn small icon={Check} onClick={() => onAddHistorico(o.id, "Seguimento: cliente contactado.")}>Já contactei</Btn>)}
+                  {o.estado === "orcamentar"
+                    ? (onAddHistorico && <Btn small variant="ghost" icon={Clock} onClick={() => onAddHistorico(o.id, "Seguimento: lembrete adiado (orçamento ainda em preparação).")}>Adiar</Btn>)
+                    : followupsFeitos(o) >= 1
+                      ? (onChangeEstado && <Btn small icon={Check} onClick={() => onChangeEstado(o.id, "sem_resposta")}>Enviei email de arquivo</Btn>)
+                      : (onAddHistorico && <Btn small icon={Check} onClick={() => onAddHistorico(o.id, "Seguimento: cliente contactado.")}>Já contactei (1.º follow-up)</Btn>)}
                 </span>
               </div>
             ))}
@@ -4236,7 +4250,7 @@ function Carpinova({ onSignOut, userEmail }) {
 
       {/* Content */}
       <div style={{ padding: "24px", maxWidth: tab === "pipeline" ? "none" : 1200, margin: "0 auto" }}>
-        {tab === "painel" && <Painel obras={obras} onOpen={setSelectedId} emails={emails} onAddHistorico={addHistorico} />}
+        {tab === "painel" && <Painel obras={obras} onOpen={setSelectedId} emails={emails} onAddHistorico={addHistorico} onChangeEstado={changeEstado} />}
         {tab === "pipeline" && <Pipeline obras={obras} onOpen={setSelectedId} onChangeEstado={changeEstado} />}
         {tab === "obras" && <ObrasTab obras={obras} onOpen={setSelectedId} onNew={() => setNovaObraOpen(true)} />}
         {tab === "emails" && <EmailsTab emails={emails} obras={obras} onUpdate={updateEmail} onUpdateMany={updateEmails} onCriarObra={(em) => { setEmailParaObra(em); setNovaObraOpen(true); }} />}
