@@ -65,6 +65,16 @@ const REJECTED_KEYS = ["rejeitado_nos", "rejeitado_cliente"];
 const LOST_KEYS = ["rejeitado_cliente"];
 // Fases a partir das quais já faz sentido montar o plano de pagamentos
 const COM_PAGAMENTOS_KEYS = ["aceite", "aguarda_adjudicacao", "adjudicado", "producao", "concluido"];
+// Nas fases em que o orçamento já foi enviado mas ainda não aceite, o plano de pagamentos
+// existe só como PREVISÃO: fica pronto, mas não conta para receitas, por receber nem tesouraria.
+const PLANO_PREVISAO_KEYS = ["entregue", "retificacao", "em_estudo"];
+const PLANO_VISIVEL_KEYS = [...PLANO_PREVISAO_KEYS, ...COM_PAGAMENTOS_KEYS];
+// Esquemas de pagamento disponíveis. A última prestação absorve os cêntimos de arredondamento.
+const ESQUEMAS_PAGAMENTO = [
+  { key: "40-40-20", label: "40/40/20", partes: [["Adjudicação", 40], ["Início de obra", 40], ["Conclusão", 20]] },
+  { key: "40-20-20-20", label: "40/20/20/20", partes: [["Adjudicação", 40], ["Início de obra", 20], ["A meio da obra", 20], ["Conclusão", 20]] },
+  { key: "50-50", label: "50/50", partes: [["Adjudicação", 50], ["Conclusão", 50]] },
+];
 
 /* Tabela de margens (Secção 4 do perfil) — liga o tipo de cliente à margem sugerida */
 const CLIENTE_TIPOS = [
@@ -215,6 +225,19 @@ const IVA_TIPOS = [
 ];
 const ivaTipoOf = (o) => IVA_TIPOS.find((t) => t.key === (o && o.ivaTipo)) || IVA_TIPOS[0];
 const fatorIva = (o) => 1 + ivaTipoOf(o).taxa;
+/* Plano de pagamentos (valores COM IVA) para um esquema. Devolve null se a obra ainda não tem valor. */
+function planoPagamentos(obra, esquema) {
+  const base = valorTotalObra(obra);
+  if (base === null) return null;
+  const v = base * fatorIva(obra);
+  let acumulado = 0;
+  return esquema.partes.map(([nome, pct], i) => {
+    const ultimo = i === esquema.partes.length - 1;
+    const valor = ultimo ? +(v - acumulado).toFixed(2) : +(v * pct / 100).toFixed(2);
+    acumulado += valor;
+    return { label: `${nome} (${pct}%)`, valor, data: "", pago: false, metodo: "", faturaEmitida: false };
+  });
+}
 const valorTotalComIva = (o) => {
   const v = valorTotalObra(o);
   return v === null ? null : v * fatorIva(o);
@@ -236,7 +259,23 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
    Uma obra numa destas fases, sem ação agendada à mão, aparece como lembrete
    quando passam X dias sem "toque": entrada na fase, email ligado à obra
    (enviado ou recebido) ou um "Já contactei" registado no histórico. */
-const SEGUIMENTO_DIAS = { orcamentar: 7, entregue: 10, retificacao: 7, em_estudo: 7 }; // dias ÚTEIS
+// Dias ÚTEIS sem "toque" até aparecer o lembrete (mínimo 7, por regra da casa).
+const SEGUIMENTO_DIAS = {
+  orcamentar: 7, entregue: 10, retificacao: 7, em_estudo: 7,
+  aceite: 7, aguarda_adjudicacao: 7, adjudicado: 7, concluido: 7,
+};
+// O que há a fazer em cada fase (mostrado no lembrete).
+const SEGUIMENTO_TEXTO = {
+  orcamentar: "orçamento por fazer",
+  aceite: "ver quando adjudicam (1.º pagamento)",
+  aguarda_adjudicacao: "ver quando adjudicam (1.º pagamento)",
+  adjudicado: "marcar o início da produção",
+  concluido: "cobrar pagamentos em falta",
+};
+// Só nestas fases faz sentido o fluxo "follow-up → email de arquivo → Sem resposta".
+const SEGUIMENTO_ARQUIVAVEL = ["entregue", "retificacao", "em_estudo"];
+// Obra concluída só pede seguimento se ainda houver pagamentos por receber.
+const seguimentoAplica = (o) => o.estado !== "concluido" || (o.pagamentos || []).some((p) => !p.pago && (Number(p.valor) || 0) > 0);
 /* Dias úteis (seg–sex) entre duas datas ISO: conta os dias depois de a, até b inclusive. */
 const diasEntre = (aISO, bISO) => {
   const a = new Date(aISO + "T00:00:00"), b = new Date(bISO + "T00:00:00");
@@ -277,16 +316,32 @@ function addDiasUteis(iso, n) {
   while (k < n) { d.setDate(d.getDate() + 1); const w = d.getDay(); if (w !== 0 && w !== 6) k++; }
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
+/* Data prevista/marcada que "segura" o lembrete: enquanto não for ultrapassada, não há follow-up.
+   Aceite / Aguarda adjudicação → Data de adjudicação; Adjudicado → Início de obra. */
+const dataPrevistaDe = (o) =>
+  o.estado === "adjudicado" ? (o.dataInicioObra || "")
+  : (o.estado === "aceite" || o.estado === "aguarda_adjudicacao") ? (o.dataAdjudicacao || "") : "";
+/* Estado do lembrete de uma obra: null se não se aplica; senão { desde, pendente, proximo, motivo }. */
+function lembreteDe(o, emails = []) {
+  const limite = SEGUIMENTO_DIAS[o.estado];
+  if (!limite || o.proximaAcaoData || !seguimentoAplica(o)) return null;
+  const hoje = todayISO();
+  const toque = ultimoToque(o, emails);
+  const dp = dataPrevistaDe(o);
+  if (dp) {
+    if (dp >= hoje) return { desde: dp, pendente: false, proximo: addDiasUteis(dp, 1), motivo: "agendada", dataPrevista: dp };
+    if (!toque || toque <= dp) return { desde: dp, pendente: true, proximo: dp, motivo: "ultrapassada", dataPrevista: dp };
+  }
+  if (!toque) return null;
+  const proximo = addDiasUteis(toque, limite);
+  return { desde: toque, pendente: proximo <= hoje, proximo, motivo: "normal" };
+}
 function seguimentosPendentes(obras, emails = []) {
   const hoje = todayISO();
   const out = [];
   obras.forEach((o) => {
-    const limite = SEGUIMENTO_DIAS[o.estado];
-    if (!limite || o.proximaAcaoData) return;
-    const toque = ultimoToque(o, emails);
-    if (!toque) return;
-    const dias = diasEntre(toque, hoje);
-    if (dias >= limite) out.push({ obra: o, dias, desde: toque });
+    const l = lembreteDe(o, emails);
+    if (l && l.pendente) out.push({ obra: o, dias: diasEntre(l.desde, hoje), desde: l.desde, motivo: l.motivo });
   });
   return out.sort((a, b) => b.dias - a.dias);
 }
@@ -1051,7 +1106,8 @@ function SeguimentoObra({ obra, emails, onPatch, onEstado }) {
   const [dataNovo, setDataNovo] = useState(todayISO());
   const limite = SEGUIMENTO_DIAS[obra.estado];
   const hist = obra.historico || [];
-  if (!limite && obra.estado !== "sem_resposta") return null;
+  if ((!limite || !seguimentoAplica(obra)) && obra.estado !== "sem_resposta") return null;
+  const arquivavel = SEGUIMENTO_ARQUIVAVEL.includes(obra.estado);
 
   // índices dos follow-ups feitos desde a última mudança de fase
   let desde = -1;
@@ -1061,9 +1117,9 @@ function SeguimentoObra({ obra, emails, onPatch, onEstado }) {
   const dataFase = desde >= 0 ? hist[desde].data : (obra.dataEntrada || "");
 
   const hoje = todayISO();
-  const toque = limite ? ultimoToque(obra, emails.filter((e) => e.obraId === obra.id)) : "";
-  const proximo = limite && !obra.proximaAcaoData && toque ? addDiasUteis(toque, limite) : "";
-  const atraso = proximo && proximo < hoje ? diasEntre(proximo, hoje) : 0;
+  const lembrete = limite ? lembreteDe(obra, emails.filter((e) => e.obraId === obra.id)) : null;
+  const proximo = lembrete ? lembrete.proximo : "";
+  const atraso = lembrete && lembrete.pendente && proximo && proximo < hoje ? diasEntre(proximo, hoje) : 0;
 
   const registar = () => onPatch({ historico: [...hist, { data: dataNovo || hoje, texto: "Seguimento: cliente contactado." }] });
   const adiar = () => onPatch({ historico: [...hist, { data: hoje, texto: "Seguimento: lembrete adiado." }] });
@@ -1072,7 +1128,7 @@ function SeguimentoObra({ obra, emails, onPatch, onEstado }) {
 
   return (
     <>
-      <CutDivider label="Seguimento do orçamento" />
+      <CutDivider label={arquivavel || obra.estado === "orcamentar" || obra.estado === "sem_resposta" ? "Seguimento do orçamento" : "Seguimento da obra"} />
       <div style={{ background: obra.estado === "sem_resposta" ? "rgba(122,127,135,0.12)" : "rgba(200,138,26,0.07)", border: `1px solid ${obra.estado === "sem_resposta" ? "#7A7F87" : T.amber}`, borderRadius: 6, padding: 14, display: "flex", flexDirection: "column", gap: 10, fontSize: 13 }}>
         {obra.estado === "sem_resposta" ? (
           <>
@@ -1084,7 +1140,9 @@ function SeguimentoObra({ obra, emails, onPatch, onEstado }) {
             <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 22px" }}>
               <span>Na fase <b>{stageOf(obra.estado).label}</b> desde <b>{fmtDate(dataFase)}</b></span>
               <span>Follow-ups feitos: <b>{followups.length}</b></span>
-              {proximo && <span>Próximo lembrete: <b style={{ color: atraso ? T.rust : "inherit" }}>{fmtDate(proximo)}</b>{atraso ? ` (em atraso há ${atraso} dias úteis)` : ""}</span>}
+              {lembrete && lembrete.motivo === "agendada"
+                ? <span>Sem lembrete até <b>{fmtDate(lembrete.dataPrevista)}</b> ({obra.estado === "adjudicado" ? "início de obra marcado" : "adjudicação prevista"}).</span>
+                : proximo && <span>Próximo lembrete: <b style={{ color: atraso ? T.rust : "inherit" }}>{fmtDate(proximo)}</b>{atraso ? ` (em atraso há ${atraso} dias úteis)` : ""}</span>}
               {obra.proximaAcaoData && <span style={{ opacity: 0.7 }}>Tem uma próxima ação agendada à mão, por isso não há lembrete automático.</span>}
             </div>
             {followups.length > 0 && (
@@ -1105,7 +1163,7 @@ function SeguimentoObra({ obra, emails, onPatch, onEstado }) {
                 <>
                   <input type="date" style={{ ...inputStyle, width: 150 }} value={dataNovo} onChange={(e) => setDataNovo(e.target.value)} />
                   <Btn small icon={Check} onClick={registar}>Registar follow-up</Btn>
-                  <Btn small variant={followups.length >= 1 ? "primary" : "ghost"} onClick={() => onEstado("sem_resposta")}>Enviei email de arquivo → Sem resposta</Btn>
+                  {arquivavel && <Btn small variant={followups.length >= 1 ? "primary" : "ghost"} onClick={() => onEstado("sem_resposta")}>Enviei email de arquivo → Sem resposta</Btn>}
                 </>
               )}
             </div>
@@ -1304,25 +1362,11 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
     if (error) console.error("Erro a remover fatura do storage:", error);
   };
 
-  // Esquemas de pagamento disponíveis. A última prestação absorve os cêntimos de arredondamento.
-  const ESQUEMAS_PAGAMENTO = [
-    { key: "40-40-20", label: "40/40/20", partes: [["Adjudicação", 40], ["Início de obra", 40], ["Conclusão", 20]] },
-    { key: "40-20-20-20", label: "40/20/20/20", partes: [["Adjudicação", 40], ["Início de obra", 20], ["A meio da obra", 20], ["Conclusão", 20]] },
-    { key: "50-50", label: "50/50", partes: [["Adjudicação", 50], ["Conclusão", 50]] },
-  ];
   const gerarPagamentos = (esquema) => {
-    if (valorRefObra === null) return;
-    const temPagos = (local.pagamentos || []).some((p) => p.pago);
-    if (temPagos) return;
+    if ((local.pagamentos || []).some((p) => p.pago)) return;
+    const pagamentos = planoPagamentos(local, esquema);
+    if (!pagamentos) return;
     if ((local.pagamentos || []).length > 0 && !window.confirm(`Substituir o plano de pagamentos atual por ${esquema.label}? As datas e métodos já preenchidos perdem-se.`)) return;
-    const v = valorRefObra * fatorIva(local); // plano com IVA incluído
-    let acumulado = 0;
-    const pagamentos = esquema.partes.map(([nome, pct], i) => {
-      const ultimo = i === esquema.partes.length - 1;
-      const valor = ultimo ? +(v - acumulado).toFixed(2) : +(v * pct / 100).toFixed(2);
-      acumulado += valor;
-      return { label: `${nome} (${pct}%)`, valor, data: "", pago: false, metodo: "", faturaEmitida: false };
-    });
     commit({ pagamentos });
   };
 
@@ -1465,10 +1509,10 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
             <Field label="Data de entrega do orçamento">
               <input type="date" style={inputStyle} value={local.dataEntrega || ""} onChange={(e) => commit({ dataEntrega: e.target.value })} />
             </Field>
-            <Field label="Data de adjudicação">
+            <Field label="Data de adjudicação (prevista ou real)">
               <input type="date" style={inputStyle} value={local.dataAdjudicacao || ""} onChange={(e) => commit({ dataAdjudicacao: e.target.value })} />
             </Field>
-            <Field label="Início de obra">
+            <Field label="Início de obra (previsto ou real)">
               <input type="date" style={inputStyle} value={local.dataInicioObra || ""} onChange={(e) => commit({ dataInicioObra: e.target.value })} />
             </Field>
             <Field label="Conclusão">
@@ -1656,10 +1700,17 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
             </div>
           </div>
 
-          {COM_PAGAMENTOS_KEYS.includes(local.estado) && (
+          {PLANO_VISIVEL_KEYS.includes(local.estado) && (() => {
+            const previsao = PLANO_PREVISAO_KEYS.includes(local.estado);
+            const somaPlano = (local.pagamentos || []).reduce((s, p) => s + (Number(p.valor) || 0), 0);
+            const esperado = valorRefObra !== null ? valorRefObra * fatorIva(local) : null;
+            const desatualizado = esperado !== null && (local.pagamentos || []).length > 0 && Math.abs(somaPlano - esperado) > 0.05;
+            return (
             <div>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: T.walnutDark, textTransform: "uppercase", letterSpacing: 0.4 }}>Plano de pagamentos (com IVA)</span>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: T.walnutDark, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                  Plano de pagamentos (com IVA){previsao ? " — previsão" : ""}
+                </span>
                 {valorRefObra !== null && !(local.pagamentos || []).some((p) => p.pago) && (
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
                     <span style={{ fontSize: 11.5, opacity: 0.6 }}>{(local.pagamentos || []).length ? "Refazer plano:" : "Gerar:"}</span>
@@ -1667,6 +1718,16 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
                   </div>
                 )}
               </div>
+              {previsao && (
+                <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 8 }}>
+                  Ainda é só uma previsão: não conta para receitas nem para o "por receber" até o orçamento ser aceite.
+                </div>
+              )}
+              {desatualizado && (
+                <div style={{ fontSize: 12, color: T.rust, marginBottom: 8 }}>
+                  A soma do plano ({fmtEUR(somaPlano)}) não bate com o valor da obra com IVA ({fmtEUR(esperado)}). Se mudaste o valor do orçamento, refaz o plano com um dos botões.
+                </div>
+              )}
               {local.pagamentos && local.pagamentos.length > 0 ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {local.pagamentos.map((p, i) => (
@@ -1680,7 +1741,7 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
                         display: "grid", gridTemplateColumns: "auto minmax(0,1.4fr) minmax(0,0.8fr) minmax(0,0.9fr) auto",
                         gap: 8, alignItems: "center",
                       }}>
-                        <input type="checkbox" checked={!!p.pago} onChange={() => togglePagamento(i)} title="Pago" />
+                        {previsao ? <span style={{ width: 13 }} /> : <input type="checkbox" checked={!!p.pago} onChange={() => togglePagamento(i)} title="Pago" />}
                         <input style={{ ...inputStyle, fontSize: 12 }} value={p.label} onChange={(e) => updatePagamento(i, { label: e.target.value })} />
                         <input type="number" style={{ ...inputStyle, fontSize: 12 }} value={p.valor ?? ""} placeholder="€"
                           onChange={(e) => updatePagamento(i, { valor: e.target.value === "" ? null : Number(e.target.value) })} />
@@ -1725,7 +1786,8 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
                 A data pode ser a prevista (ainda não pago) ou a data em que recebeste — fica preenchida automaticamente com hoje quando marcas como pago, mas podes sempre corrigir.
               </div>
             </div>
-          )}
+            );
+          })()}
 
           <CutDivider label="Emails de cotação e orçamento" />
           <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
@@ -1993,7 +2055,7 @@ function Painel({ obras, onOpen, emails = [], onAddHistorico, onChangeEstado }) 
         <>
           <CutDivider label={`Para dar seguimento (${seguimentos.length})`} />
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 20 }}>
-            {seguimentos.slice(0, 12).map(({ obra: o, dias }) => (
+            {seguimentos.slice(0, 12).map(({ obra: o, dias, motivo }) => (
               <div key={o.id} onClick={() => onOpen(o.id)} style={{
                 display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", flexWrap: "wrap",
                 background: "rgba(200,138,26,0.08)", border: `1px solid ${T.amber}`, borderRadius: 4, cursor: "pointer", fontSize: 13,
@@ -2003,14 +2065,15 @@ function Painel({ obras, onOpen, emails = [], onAddHistorico, onChangeEstado }) 
                 <span style={{ fontWeight: 600 }}>{o.projeto}</span>
                 <span style={{ opacity: 0.6 }}>— {o.cliente}</span>
                 <Tag color={stageOf(o.estado).color}>{stageOf(o.estado).label}</Tag>
-                {o.estado === "orcamentar" && <span style={{ fontSize: 12, opacity: 0.7 }}>orçamento por fazer</span>}
-                {o.estado !== "orcamentar" && followupsFeitos(o) >= 1 && <span style={{ fontSize: 12, opacity: 0.7 }}>1.º follow-up feito, falta o email de arquivo</span>}
+                {SEGUIMENTO_TEXTO[o.estado] && <span style={{ fontSize: 12, opacity: 0.7 }}>{SEGUIMENTO_TEXTO[o.estado]}</span>}
+                {motivo === "ultrapassada" && <span style={{ fontSize: 12, color: T.rust }}>a data prevista já passou ({dias} dias úteis)</span>}
+                {SEGUIMENTO_ARQUIVAVEL.includes(o.estado) && followupsFeitos(o) >= 1 && <span style={{ fontSize: 12, opacity: 0.7 }}>1.º follow-up feito, falta o email de arquivo</span>}
                 <span style={{ marginLeft: "auto" }} onClick={(e) => e.stopPropagation()}>
                   {o.estado === "orcamentar"
                     ? (onAddHistorico && <Btn small variant="ghost" icon={Clock} onClick={() => onAddHistorico(o.id, "Seguimento: lembrete adiado (orçamento ainda em preparação).")}>Adiar</Btn>)
-                    : followupsFeitos(o) >= 1
+                    : SEGUIMENTO_ARQUIVAVEL.includes(o.estado) && followupsFeitos(o) >= 1
                       ? (onChangeEstado && <Btn small icon={Check} onClick={() => onChangeEstado(o.id, "sem_resposta")}>Enviei email de arquivo</Btn>)
-                      : (onAddHistorico && <Btn small icon={Check} onClick={() => onAddHistorico(o.id, "Seguimento: cliente contactado.")}>Já contactei (1.º follow-up)</Btn>)}
+                      : (onAddHistorico && <Btn small icon={Check} onClick={() => onAddHistorico(o.id, "Seguimento: cliente contactado.")}>{SEGUIMENTO_ARQUIVAVEL.includes(o.estado) ? "Já contactei (1.º follow-up)" : "Já contactei"}</Btn>)}
                 </span>
               </div>
             ))}
@@ -2471,7 +2534,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
     let acumulado = 0;
     return mesesFuturos.map((mk) => {
       let entradas = 0;
-      obras.forEach((o) => (o.pagamentos || []).forEach((p) => {
+      obras.filter((o) => COM_PAGAMENTOS_KEYS.includes(o.estado)).forEach((o) => (o.pagamentos || []).forEach((p) => {
         if (!p.pago && p.data && p.data.slice(0, 7) === mk) entradas += Number(p.valor) || 0;
       }));
       const saidas = despesasGerais.reduce((s, d) => s + despesaValorNoMes(d, mk, true), 0);
