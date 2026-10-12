@@ -808,6 +808,7 @@ function useClientesStore() {
    ============================================================ */
 function useEmailsStore() {
   const [emails, setEmails] = useState([]);
+  const [carregado, setCarregado] = useState(false);
   const eRef = useRef([]);
   eRef.current = emails;
 
@@ -819,6 +820,7 @@ function useEmailsStore() {
       if (cancelled) return;
       if (error) { console.error("Erro a carregar emails:", error); return; }
       setEmails((data || []).map((r) => ({ ...r.payload, id: r.id })));
+      setCarregado(true);
       channel = supabase
         .channel("emails-realtime")
         .on("postgres_changes", { event: "*", schema: "public", table: "emails" }, (msg) => {
@@ -855,7 +857,57 @@ function useEmailsStore() {
     }
   }, []);
 
-  return { emails, updateEmail, updateEmails };
+  return { emails, carregado, updateEmail, updateEmails };
+}
+
+/* ---------- Separador do browser: ícone + número de emails por ler ----------
+   O ícone é o ficheiro public/logo.png do repositório (se existir); senão
+   desenha um "C" castanho. Com emails por ler, aparece uma bolinha vermelha
+   com o número no ícone e "(n)" no título do separador. */
+function useAvisoSeparador(n) {
+  const logoRef = useRef(undefined); // undefined = por carregar, null = não existe
+  const desenhar = useCallback((img) => {
+    try {
+      const c = document.createElement("canvas"); c.width = c.height = 64;
+      const g = c.getContext("2d");
+      if (img) { g.drawImage(img, 0, 0, 64, 64); }
+      else {
+        g.fillStyle = T.walnut; g.beginPath(); g.roundRect(0, 0, 64, 64, 14); g.fill();
+        g.fillStyle = "#fff"; g.font = "bold 40px Georgia, serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("C", 32, 35);
+      }
+      if (n > 0) {
+        g.fillStyle = "#D32F2F"; g.beginPath(); g.arc(46, 18, 18, 0, Math.PI * 2); g.fill();
+        g.fillStyle = "#fff"; g.font = "bold 22px Arial, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
+        g.fillText(n > 9 ? "9+" : String(n), 46, 19);
+      }
+      let link = document.querySelector("link[rel~='icon']");
+      if (!link) { link = document.createElement("link"); link.rel = "icon"; document.head.appendChild(link); }
+      link.type = "image/png"; link.href = c.toDataURL("image/png");
+    } catch { /* o ícone é só um extra */ }
+  }, [n]);
+  useEffect(() => {
+    document.title = n > 0 ? `(${n}) Carpinova CRM` : "Carpinova CRM";
+    if (logoRef.current !== undefined) { desenhar(logoRef.current); return; }
+    const img = new Image();
+    img.onload = () => { logoRef.current = img; desenhar(img); };
+    img.onerror = () => { logoRef.current = null; desenhar(null); };
+    img.src = `${import.meta.env.BASE_URL}logo.png`;
+  }, [n, desenhar]);
+}
+
+/* Aviso do sistema quando chega um email novo com o CRM aberto (só se o utilizador ativar). */
+function useAvisoEmailNovo(emails, carregado) {
+  const vistos = useRef(null);
+  useEffect(() => {
+    if (!carregado) return;
+    if (vistos.current === null) { vistos.current = new Set(emails.map((e) => e.id)); return; }
+    const novos = emails.filter((e) => !vistos.current.has(e.id));
+    novos.forEach((e) => vistos.current.add(e.id));
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    novos.filter(emailNaoLido).slice(0, 3).forEach((e) => {
+      try { new Notification("Novo email — Carpinova", { body: e.assunto || "(sem assunto)" }); } catch { /* ignora */ }
+    });
+  }, [emails, carregado]);
 }
 
 /* Um email enviado por nós conta como lido. Não lido = recebido e ainda não aberto. */
@@ -3949,6 +4001,7 @@ function EmailsTab({ emails, obras, onUpdate, onUpdateMany, onCriarObra }) {
       .filter((e) => !q || `${e.assunto} ${e.de} ${e.deEmail} ${e.texto}`.toLowerCase().includes(q.toLowerCase()))
       .sort((a, b) => (b.data || "").localeCompare(a.data || ""));
   }, [emails, filtro, q]);
+  const [permAviso, setPermAviso] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
   const nNaoLidos = emails.filter(emailNaoLido).length;
   const nPorTratar = emails.filter(emailPorTratar).length;
   const idsNaoLidos = lista.filter(emailNaoLido).map((e) => e.id);
@@ -3970,6 +4023,9 @@ function EmailsTab({ emails, obras, onUpdate, onUpdateMany, onCriarObra }) {
           <option value="ignorados">Ignorados</option>
           <option value="todos">Todos</option>
         </select>
+        {permAviso === "default" && (
+          <Btn small variant="ghost" onClick={() => Notification.requestPermission().then(setPermAviso)}>Ativar avisos de emails novos</Btn>
+        )}
         {idsNaoLidos.length > 0 && onUpdateMany && (
           <Btn small variant="ghost" icon={Eye} onClick={() => onUpdateMany(idsNaoLidos, { lido: true })}>Marcar estes como lidos</Btn>
         )}
@@ -4061,9 +4117,11 @@ function Carpinova({ onSignOut, userEmail }) {
   const { despesas, addDespesa, updateDespesa, deleteDespesa } = useDespesasStore();
   const { clientes, addCliente, updateCliente, deleteCliente, syncCliente } = useClientesStore();
   const { equipa, addMembro, updateMembro, deleteMembro } = useEquipaStore();
-  const { emails, updateEmail, updateEmails } = useEmailsStore();
+  const { emails, carregado: emailsCarregados, updateEmail, updateEmails } = useEmailsStore();
   const [emailParaObra, setEmailParaObra] = useState(null);
   const emailsNovos = emails.filter(emailNaoLido).length;
+  useAvisoSeparador(emailsNovos);
+  useAvisoEmailNovo(emails, emailsCarregados);
   const nSeguimentos = useMemo(() => seguimentosPendentes(obras, emails).length, [obras, emails]);
   const clientesNomesUnicos = useMemo(() => {
     const set = new Set();
