@@ -869,14 +869,20 @@ function useAvisoSeparador(n) {
     try {
       const c = document.createElement("canvas"); c.width = c.height = 64;
       const g = c.getContext("2d");
-      if (img) { g.drawImage(img, 0, 0, 64, 64); }
+      if (img) {
+        const k = Math.min(64 / img.width, 64 / img.height); // mantém as proporções do logo
+        const w = img.width * k, h = img.height * k;
+        g.drawImage(img, (64 - w) / 2, (64 - h) / 2, w, h);
+      }
       else {
         g.fillStyle = T.walnut; g.beginPath(); g.roundRect(0, 0, 64, 64, 14); g.fill();
         g.fillStyle = "#fff"; g.font = "bold 40px Georgia, serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("C", 32, 35);
       }
-      let link = document.querySelector("link[rel~='icon']");
-      if (!link) { link = document.createElement("link"); link.rel = "icon"; document.head.appendChild(link); }
-      link.type = "image/png"; link.href = c.toDataURL("image/png");
+      // Substitui o <link> do ícone por um novo (alguns browsers não atualizam o ícone se só se mudar o href)
+      document.querySelectorAll("link[rel~='icon']").forEach((l) => l.remove());
+      const link = document.createElement("link");
+      link.rel = "icon"; link.type = "image/png"; link.href = c.toDataURL("image/png");
+      document.head.appendChild(link);
     } catch { /* o ícone é só um extra */ }
   }, [n]);
   useEffect(() => {
@@ -1888,8 +1894,11 @@ function Painel({ obras, onOpen, emails = [], onAddHistorico }) {
                 <span style={{ fontWeight: 600 }}>{o.projeto}</span>
                 <span style={{ opacity: 0.6 }}>— {o.cliente}</span>
                 <Tag color={stageOf(o.estado).color}>{stageOf(o.estado).label}</Tag>
+                {o.estado === "orcamentar" && <span style={{ fontSize: 12, opacity: 0.7 }}>orçamento por fazer</span>}
                 <span style={{ marginLeft: "auto" }} onClick={(e) => e.stopPropagation()}>
-                  {onAddHistorico && <Btn small icon={Check} onClick={() => onAddHistorico(o.id, "Seguimento: cliente contactado.")}>Já contactei</Btn>}
+                  {onAddHistorico && (o.estado === "orcamentar"
+                    ? <Btn small variant="ghost" icon={Clock} onClick={() => onAddHistorico(o.id, "Seguimento: lembrete adiado (orçamento ainda em preparação).")}>Adiar</Btn>
+                    : <Btn small icon={Check} onClick={() => onAddHistorico(o.id, "Seguimento: cliente contactado.")}>Já contactei</Btn>)}
                 </span>
               </div>
             ))}
