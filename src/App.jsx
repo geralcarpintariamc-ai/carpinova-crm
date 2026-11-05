@@ -3574,6 +3574,296 @@ function Fornecedores({ fornecedores, onAdd, onUpdate, onDelete, despesas, obras
 }
 
 /* ============================================================
+   RELATÓRIOS — resumo de gestão por mês / trimestre / ano, dentro do
+   próprio CRM (sem emails). Imprime-se ou guarda-se em PDF pelo
+   navegador, e as tabelas exportam-se para CSV.
+   ============================================================ */
+const MESES_LONGOS = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+const mesKeyDe = (idx) => `${Math.floor(idx / 12)}-${String((idx % 12) + 1).padStart(2, "0")}`;
+
+function periodoDe(tipo, ano, valor) {
+  const a = Number(ano);
+  let ini, n;
+  if (tipo === "mes") { ini = a * 12 + (valor - 1); n = 1; }
+  else if (tipo === "trimestre") { ini = a * 12 + (valor - 1) * 3; n = 3; }
+  else { ini = a * 12; n = 12; }
+  const meses = Array.from({ length: n }, (_, i) => mesKeyDe(ini + i));
+  const anteriores = Array.from({ length: n }, (_, i) => mesKeyDe(ini - n + i));
+  const label = tipo === "mes" ? `${MESES_LONGOS[valor - 1]} ${a}` : tipo === "trimestre" ? `${valor}.º trimestre de ${a}` : `Ano ${a}`;
+  return { meses, anteriores, label };
+}
+
+const csvEscape = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+function baixarCSV(nome, linhas) {
+  const csv = "﻿" + linhas.map((l) => l.map(csvEscape).join(";")).join("\n");
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = nome; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function Relatorios({ obras, despesas, onOpenObra }) {
+  const hoje = new Date();
+  const [tipo, setTipo] = useState("mes");
+  const [ano, setAno] = useState(String(hoje.getFullYear()));
+  const [valor, setValor] = useState(hoje.getMonth() + 1);
+
+  const anos = useMemo(() => {
+    const s = new Set([String(hoje.getFullYear())]);
+    obras.forEach((o) => [o.dataEntrada, o.dataAdjudicacao].forEach((d) => d && s.add(d.slice(0, 4))));
+    despesas.forEach((d) => d.data && s.add(d.data.slice(0, 4)));
+    return [...s].sort().reverse();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [obras, despesas]);
+
+  const mudarTipo = (t) => {
+    setTipo(t);
+    setValor(t === "mes" ? hoje.getMonth() + 1 : t === "trimestre" ? Math.floor(hoje.getMonth() / 3) + 1 : 1);
+  };
+
+  const per = useMemo(() => periodoDe(tipo, ano, valor), [tipo, ano, valor]);
+
+  const r = useMemo(() => {
+    const idObrasRejeitadas = new Set(obras.filter((o) => REJECTED_KEYS.includes(o.estado)).map((o) => o.id));
+    const despValidas = despesas.filter((d) => !d.obraId || !idObrasRejeitadas.has(d.obraId));
+    const dataReceita = (o) => o.dataAdjudicacao || o.dataInicioObra || o.dataEntrada;
+
+    const calc = (meses) => {
+      const set = new Set(meses);
+      const noPeriodo = (d) => d && set.has(String(d).slice(0, 7));
+      // custo (ex-IVA) com a regra das despesas mensais recorrentes
+      const custoMes = (d, mk) => {
+        if (!d.data || d.valor == null) return 0;
+        const v = despesaBase(d), ini = d.data.slice(0, 7);
+        return d.recorrente ? (mk >= ini ? v : 0) : (ini === mk ? v : 0);
+      };
+      const despCat = {}; const despForn = {};
+      let custos = 0;
+      despValidas.forEach((d) => {
+        const v = meses.reduce((s, mk) => s + custoMes(d, mk), 0);
+        if (!v) return;
+        custos += v;
+        despCat[d.categoria || "Outro"] = (despCat[d.categoria || "Outro"] || 0) + v;
+        if (d.fornecedor) despForn[d.fornecedor] = (despForn[d.fornecedor] || 0) + v;
+      });
+
+      const adjudicadas = obras.filter((o) => WON_KEYS.includes(o.estado) && noPeriodo(dataReceita(o)));
+      const adjudicado = adjudicadas.reduce((s, o) => s + (valorTotalObra(o) || 0), 0);
+      const pedidos = obras.filter((o) => noPeriodo(o.dataEntrada));
+      const ganhos = pedidos.filter((o) => WON_KEYS.includes(o.estado)).length;
+      const perdidos = pedidos.filter((o) => REJECTED_KEYS.includes(o.estado)).length;
+
+      let recebido = 0, faturado = 0, pagoForn = 0;
+      obras.forEach((o) => (o.pagamentos || []).forEach((p) => {
+        if (p.pago && noPeriodo(p.data)) recebido += Number(p.valor) || 0;
+        if (p.faturaEmitida && noPeriodo(p.data)) faturado += Number(p.valor) || 0;
+      }));
+      despesas.forEach((d) => { if (d.pago && noPeriodo(d.data)) pagoForn += Number(d.valor) || 0; });
+
+      return {
+        adjudicadas, adjudicado, custos, resultado: adjudicado - custos,
+        margem: adjudicado > 0 ? ((adjudicado - custos) / adjudicado) * 100 : null,
+        pedidos, valorPedidos: pedidos.reduce((s, o) => s + (valorTotalObra(o) || 0), 0),
+        ganhos, perdidos, taxa: ganhos + perdidos > 0 ? Math.round((ganhos / (ganhos + perdidos)) * 100) : null,
+        recebido, faturado, pagoForn, despCat, despForn,
+      };
+    };
+
+    const atual = calc(per.meses);
+    const anterior = calc(per.anteriores);
+
+    // Custos reais por obra (todas as despesas ligadas, ex-IVA)
+    const custoObra = {};
+    despValidas.forEach((d) => { if (d.obraId) custoObra[d.obraId] = (custoObra[d.obraId] || 0) + despesaBase(d); });
+    const rentab = atual.adjudicadas.map((o) => {
+      const v = valorTotalObra(o) || 0, c = custoObra[o.id] || 0;
+      return { o, valor: v, custo: c, lucro: v - c, margem: v > 0 ? ((v - c) / v) * 100 : null, semCustos: c === 0 };
+    }).sort((a, b) => b.valor - a.valor);
+
+    // Clientes do período
+    const cli = {};
+    atual.adjudicadas.forEach((o) => { const n = (o.cliente || "—").trim(); cli[n] = (cli[n] || 0) + (valorTotalObra(o) || 0); });
+
+    // Situação de hoje (independente do período)
+    const hojeISO = todayISO();
+    let porReceber = 0, receberAtraso = 0, nAtrasoRec = 0;
+    obras.filter((o) => COM_PAGAMENTOS_KEYS.includes(o.estado)).forEach((o) => (o.pagamentos || []).forEach((p) => {
+      if (p.pago) return;
+      const v = Number(p.valor) || 0; porReceber += v;
+      if (p.data && p.data < hojeISO) { receberAtraso += v; nAtrasoRec += 1; }
+    }));
+    let porPagar = 0, pagarAtraso = 0, nAtrasoPag = 0;
+    despesas.forEach((d) => {
+      if (d.pago || !d.valor || !(d.numeroFatura || d.dataVencimento)) return;
+      const v = Number(d.valor) || 0; porPagar += v;
+      if (d.dataVencimento && d.dataVencimento < hojeISO) { pagarAtraso += v; nAtrasoPag += 1; }
+    });
+
+    const porMes = per.meses.map((mk) => {
+      const m = calc([mk]);
+      return { mes: monthLabel(mk), Adjudicado: Math.round(m.adjudicado), Custos: Math.round(m.custos) };
+    });
+
+    return { atual, anterior, rentab, cli: Object.entries(cli).sort((a, b) => b[1] - a[1]).slice(0, 8),
+      porReceber, receberAtraso, nAtrasoRec, porPagar, pagarAtraso, nAtrasoPag, porMes };
+  }, [obras, despesas, per]);
+
+  const { atual: a, anterior: b } = r;
+  const cats = Object.entries(a.despCat).sort((x, y) => y[1] - x[1]);
+  const forns = Object.entries(a.despForn).sort((x, y) => y[1] - x[1]).slice(0, 8);
+  const maxCat = cats[0]?.[1] || 1, maxForn = forns[0]?.[1] || 1, maxCli = r.cli[0]?.[1] || 1;
+
+  const exportar = () => {
+    const linhas = [
+      [`Relatório Carpinova — ${per.label}`], [],
+      ["Resumo"], ["Adjudicado (ex-IVA)", a.adjudicado], ["Custos (ex-IVA)", a.custos], ["Resultado", a.resultado], ["Margem %", a.margem == null ? "" : a.margem.toFixed(1)],
+      ["Recebido de clientes (c/ IVA)", a.recebido], ["Pago a fornecedores (c/ IVA)", a.pagoForn], [],
+      ["Obras adjudicadas no período"], ["Ref", "Projeto", "Cliente", "Valor ex-IVA", "Custos ex-IVA", "Lucro", "Margem %"],
+      ...r.rentab.map((x) => [x.o.ref || "", x.o.projeto, x.o.cliente, x.valor.toFixed(2), x.custo.toFixed(2), x.lucro.toFixed(2), x.margem == null ? "" : x.margem.toFixed(1)]), [],
+      ["Despesas por categoria"], ...cats.map(([k, v]) => [k, v.toFixed(2)]),
+    ];
+    baixarCSV(`relatorio-carpinova-${per.meses[0]}.csv`, linhas);
+  };
+
+  const Bloco = ({ titulo, children, extra }) => (
+    <section className="rel-bloco">
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <h3 style={{ margin: 0, fontSize: 14.5, fontWeight: 750, color: T.walnutDark }}>{titulo}</h3>{extra}
+      </div>
+      {children}
+    </section>
+  );
+  const Barra = ({ nome, valor, max, cor = T.walnut }) => (
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(90px, 160px) 1fr auto", alignItems: "center", gap: 10, fontSize: 12.5, marginBottom: 7 }}>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nome}</span>
+      <span style={{ height: 8, borderRadius: 99, background: T.paper3, overflow: "hidden" }}>
+        <span style={{ display: "block", height: "100%", width: `${Math.max(3, (valor / max) * 100)}%`, background: cor, borderRadius: 99 }} />
+      </span>
+      <b style={{ color: T.walnutDark }}>{fmtEUR(valor)}</b>
+    </div>
+  );
+  const corMargem = (m) => (m == null ? T.ink : m < 0 ? T.rust : m < 20 ? T.amber : T.green);
+
+  return (
+    <div className="relatorio">
+      <div className="no-print" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 18 }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <Chip ativo={tipo === "mes"} onClick={() => mudarTipo("mes")}>Mês</Chip>
+          <Chip ativo={tipo === "trimestre"} onClick={() => mudarTipo("trimestre")}>Trimestre</Chip>
+          <Chip ativo={tipo === "ano"} onClick={() => mudarTipo("ano")}>Ano</Chip>
+        </div>
+        {tipo === "mes" && (
+          <select style={{ ...selectStyle, width: "auto" }} value={valor} onChange={(e) => setValor(Number(e.target.value))}>
+            {MESES_LONGOS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+          </select>
+        )}
+        {tipo === "trimestre" && (
+          <select style={{ ...selectStyle, width: "auto" }} value={valor} onChange={(e) => setValor(Number(e.target.value))}>
+            {[1, 2, 3, 4].map((q) => <option key={q} value={q}>{q}.º trimestre</option>)}
+          </select>
+        )}
+        <select style={{ ...selectStyle, width: "auto" }} value={ano} onChange={(e) => setAno(e.target.value)}>
+          {anos.map((y) => <option key={y} value={y}>{y}</option>)}
+        </select>
+        <div style={{ flex: 1 }} />
+        <Btn small variant="ghost" icon={Download} onClick={exportar}>Exportar CSV</Btn>
+        <Btn small icon={FileText} onClick={() => window.print()}>Guardar PDF / Imprimir</Btn>
+      </div>
+
+      <div className="print-only" style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 22, fontWeight: 800 }}>Carpinova — Relatório de gestão</div>
+        <div style={{ fontSize: 14, opacity: 0.7 }}>{per.label} · emitido a {fmtDate(todayISO())}</div>
+      </div>
+      <div className="no-print" style={{ fontSize: 22, fontWeight: 800, letterSpacing: -0.4, color: T.walnutDark, marginBottom: 14 }}>{per.label}</div>
+
+      <div className="stagger" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginBottom: 20 }}>
+        <KpiCard icon={Banknote} label="Adjudicado" value={fmtEUR(a.adjudicado)} sub={`${a.adjudicadas.length} obra(s), ex-IVA`} accent={T.green} delta={<DeltaBadge atual={a.adjudicado} anterior={b.adjudicado} />} />
+        <KpiCard icon={Wallet} label="Custos" value={fmtEUR(a.custos)} sub="material, mão de obra, gerais" accent={T.rust} delta={<DeltaBadge atual={a.custos} anterior={b.custos} invertido />} />
+        <KpiCard icon={TrendingUp} label="Resultado" value={fmtEUR(a.resultado)} accent={a.resultado < 0 ? T.rust : T.walnut}
+          sub={a.margem == null ? "sem adjudicações" : `margem ${a.margem.toFixed(0)}%`} delta={<DeltaBadge atual={a.resultado} anterior={b.resultado} />} />
+        <KpiCard icon={CheckCircle2} label="Conversão" value={a.taxa == null ? "—" : `${a.taxa}%`} accent={T.navy}
+          sub={`${a.pedidos.length} pedidos · ${a.ganhos} ganhos · ${a.perdidos} perdidos`} />
+      </div>
+
+      <div className="rel-grid">
+        <Bloco titulo="Adjudicado vs custos">
+          <div style={{ height: 230 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={r.porMes} margin={{ top: 4, right: 4, left: -12, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" vertical={false} />
+                <XAxis dataKey="mes" interval={0} tick={{ fontSize: 11, fill: "var(--ink)", opacity: 0.6 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: "var(--ink)", opacity: 0.6 }} axisLine={false} tickLine={false} tickFormatter={(v) => (v >= 1000 ? `${Math.round(v / 1000)}k` : v)} />
+                <Tooltip formatter={(v) => fmtEUR(v)} contentStyle={{ background: "var(--paper2)", border: "1px solid var(--line)", borderRadius: 10, fontSize: 12 }} />
+                <Bar dataKey="Adjudicado" fill="var(--walnut)" radius={[6, 6, 0, 0]} isAnimationActive={false} />
+                <Bar dataKey="Custos" fill="var(--rust)" radius={[6, 6, 0, 0]} isAnimationActive={false} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Bloco>
+
+        <Bloco titulo="Dinheiro (com IVA)">
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <MiniStat label="Recebido no período" value={fmtEUR(a.recebido)} cor={T.green} />
+            <MiniStat label="Pago a fornecedores" value={fmtEUR(a.pagoForn)} />
+            <MiniStat label="Por receber (hoje)" value={fmtEUR(r.porReceber)} cor={T.amber} sub={r.nAtrasoRec ? `${fmtEUR(r.receberAtraso)} em atraso (${r.nAtrasoRec})` : "sem atrasos"} />
+            <MiniStat label="Por pagar (hoje)" value={fmtEUR(r.porPagar)} cor={T.rust} sub={r.nAtrasoPag ? `${fmtEUR(r.pagarAtraso)} em atraso (${r.nAtrasoPag})` : "sem atrasos"} />
+          </div>
+          <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 10 }}>"Por receber" e "Por pagar" são a situação de hoje; o resto refere-se ao período escolhido.</div>
+        </Bloco>
+      </div>
+
+      <Bloco titulo={`Rentabilidade das obras adjudicadas (${r.rentab.length})`}>
+        {r.rentab.length === 0 ? <div style={{ fontSize: 13, opacity: 0.55 }}>Sem obras adjudicadas neste período.</div> : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead><tr style={{ textAlign: "left", fontSize: 11.5, opacity: 0.55 }}>
+                <th style={{ padding: "6px 8px" }}>Obra</th><th>Cliente</th><th style={{ textAlign: "right" }}>Valor</th><th style={{ textAlign: "right" }}>Custos</th><th style={{ textAlign: "right" }}>Lucro</th><th style={{ textAlign: "right", paddingRight: 8 }}>Margem</th>
+              </tr></thead>
+              <tbody>
+                {r.rentab.map((x) => (
+                  <tr key={x.o.id} onClick={() => onOpenObra(x.o.id)} style={{ borderTop: `1px solid ${T.line}`, cursor: "pointer" }}>
+                    <td style={{ padding: "8px", fontWeight: 650 }}>{x.o.projeto}<div style={{ fontSize: 11, opacity: 0.5, fontWeight: 400 }}>{x.o.ref || "s/ ref"}</div></td>
+                    <td>{x.o.cliente}</td>
+                    <td style={{ textAlign: "right" }}>{fmtEUR(x.valor)}</td>
+                    <td style={{ textAlign: "right" }}>{x.semCustos ? <span style={{ opacity: 0.4 }}>sem custos</span> : fmtEUR(x.custo)}</td>
+                    <td style={{ textAlign: "right", fontWeight: 700 }}>{x.semCustos ? "—" : fmtEUR(x.lucro)}</td>
+                    <td style={{ textAlign: "right", paddingRight: 8, fontWeight: 750, color: x.semCustos ? undefined : corMargem(x.margem) }}>{x.semCustos || x.margem == null ? "—" : `${x.margem.toFixed(0)}%`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 8 }}>Custos = tudo o que foi lançado nessa obra (ex-IVA). Obras sem custos lançados não têm margem calculável. Verde ≥ 20%, âmbar abaixo disso, vermelho negativo.</div>
+          </div>
+        )}
+      </Bloco>
+
+      <div className="rel-grid" style={{ marginTop: 16 }}>
+        <Bloco titulo="Despesas por categoria">
+          {cats.length === 0 ? <div style={{ fontSize: 13, opacity: 0.55 }}>Sem despesas neste período.</div> : cats.map(([k, v]) => <Barra key={k} nome={k} valor={v} max={maxCat} cor={T.rust} />)}
+        </Bloco>
+        <Bloco titulo="Maiores fornecedores">
+          {forns.length === 0 ? <div style={{ fontSize: 13, opacity: 0.55 }}>Sem compras neste período.</div> : forns.map(([k, v]) => <Barra key={k} nome={k} valor={v} max={maxForn} cor={T.navy} />)}
+        </Bloco>
+      </div>
+
+      <div className="rel-grid" style={{ marginTop: 16 }}>
+        <Bloco titulo="Maiores clientes (adjudicado)">
+          {r.cli.length === 0 ? <div style={{ fontSize: 13, opacity: 0.55 }}>Sem adjudicações neste período.</div> : r.cli.map(([k, v]) => <Barra key={k} nome={k} valor={v} max={maxCli} cor={T.green} />)}
+        </Bloco>
+        <Bloco titulo="Pedidos recebidos no período">
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <MiniStat label="Pedidos" value={a.pedidos.length} sub={`${b.pedidos.length} no período anterior`} />
+            <MiniStat label="Valor orçamentado" value={fmtEUR(a.valorPedidos)} />
+            <MiniStat label="Ganhos" value={a.ganhos} cor={T.green} />
+            <MiniStat label="Perdidos" value={a.perdidos} cor={T.rust} />
+          </div>
+        </Bloco>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
    FATURAS — contas a pagar a fornecedores. É a mesma informação dos
    "Custos da Obra" (para não haver lançamento duplicado), só que aqui
    vista como contas a pagar: por fornecedor, com vencimento e estado.
@@ -4411,6 +4701,7 @@ const TABS = [
   { key: "clientes", label: "Clientes", icon: Users, grupo: "Comercial" },
   { key: "producao", label: "Produção", icon: Calendar, grupo: "Oficina" },
   { key: "financeiro", label: "Financeiro", icon: Wallet, grupo: "Finanças" },
+  { key: "relatorios", label: "Relatórios", icon: TrendingUp, grupo: "Finanças" },
   { key: "receitas", label: "Receitas", icon: Banknote, grupo: "Finanças" },
   { key: "faturas", label: "Faturas", icon: Receipt, grupo: "Finanças" },
   { key: "fornecedores", label: "Fornecedores", icon: Package, grupo: "Finanças" },
@@ -4665,6 +4956,7 @@ function Carpinova({ onSignOut, userEmail }) {
           {tab === "producao" && <Producao obras={obras} onOpenObra={setSelectedId} />}
           {tab === "financeiro" && <Financeiro obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} equipa={equipa} onAddMembro={addMembro} onUpdateMembro={updateMembro} onDeleteMembro={deleteMembro} />}
           {tab === "receitas" && <Receitas obras={obras} onOpenObra={setSelectedId} />}
+          {tab === "relatorios" && <Relatorios obras={obras} despesas={despesas} onOpenObra={setSelectedId} />}
           {tab === "faturas" && <Faturas obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onOpenObra={setSelectedId} fornecedorNomes={fornecedores.map((f) => f.nome)} />}
           {tab === "clientes" && <Clientes obras={obras} clientes={clientes} onAddCliente={addCliente} onUpdateCliente={updateCliente} onDeleteCliente={deleteCliente} onOpenObra={setSelectedId} />}
           {tab === "fornecedores" && <Fornecedores fornecedores={fornecedores} onAdd={addFornecedor} onUpdate={updateFornecedor} onDelete={deleteFornecedor} despesas={despesas} obras={obras} onOpenObra={setSelectedId} />}

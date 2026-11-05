@@ -240,3 +240,17 @@ body {
 .kanban-scroll { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--walnut) 45%, var(--line)) transparent; }
 .kanban-scroll::-webkit-scrollbar { height: 10px; }
 .kanban-scroll::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--walnut) 40%, var(--line)); border-radius: 999px; }
+
+/* ---------- Relatórios ---------- */
+.rel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.rel-bloco { background: var(--paper2); border: 1px solid var(--line); border-radius: 16px; padding: 18px; box-shadow: var(--shadow-sm); break-inside: avoid; }
+.print-only { display: none; }
+@media print {
+  .sidebar, .topbar, .sidebar-scrim, .no-print, .cmdk-wrap { display: none !important; }
+  .print-only { display: block !important; }
+  html, body { background: #fff !important; background-image: none !important; color: #111 !important; }
+  .app-shell, .main, .content { display: block !important; padding: 0 !important; max-width: none !important; }
+  .rel-bloco, .ui-card { box-shadow: none !important; border: 1px solid #ddd !important; background: #fff !important; }
+  .page-enter, .stagger > * { animation: none !important; }
+  :root, :root[data-theme="dark"] { --ink: #111; --paper: #fff; --paper2: #fff; --paper3: #f1f1f1; --line: #ddd; --walnutDark: #111; }
+}
