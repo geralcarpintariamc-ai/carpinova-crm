@@ -6,7 +6,7 @@ import {
   ChevronRight, ChevronUp, MapPin, Euro, FileText, Users, LayoutGrid, Table as TableIcon,
   Wallet, Wrench, ArrowRight, Trash2, Save, RotateCcw, Globe, Upload, Paperclip,
   FileSpreadsheet, Image as ImageIcon, FileType, Receipt, Banknote, Landmark, Check, Eye,
-  Menu, Moon, Sun, LogOut, MessageCircle
+  Menu, Moon, Sun, LogOut, MessageCircle, ChevronLeft
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -2126,6 +2126,29 @@ function Pipeline({ obras, onOpen, onChangeEstado }) {
   const [overStage, setOverStage] = useState(null);
   const [q, setQ] = useState("");
   const [verArquivo, setVerArquivo] = useState(false);
+  const scrollerRef = useRef(null);
+  const pan = useRef(null);
+  const [panning, setPanning] = useState(false);
+
+  // Agarrar e deslizar: arrastar numa zona vazia (não num cartão) desloca o quadro
+  const onPanDown = (e) => {
+    if (e.button !== 0 || e.target.closest("[draggable='true'], button, input, a")) return;
+    const el = scrollerRef.current;
+    pan.current = { x: e.clientX, left: el.scrollLeft };
+    setPanning(true);
+    const mover = (ev) => { if (pan.current) el.scrollLeft = pan.current.left - (ev.clientX - pan.current.x); };
+    const largar = () => { pan.current = null; setPanning(false); window.removeEventListener("mousemove", mover); window.removeEventListener("mouseup", largar); };
+    window.addEventListener("mousemove", mover);
+    window.addEventListener("mouseup", largar);
+  };
+  const deslizar = (dir) => scrollerRef.current?.scrollBy({ left: dir * 600, behavior: "smooth" });
+  // Ao arrastar um cartão para a beira, o quadro desloca-se sozinho
+  const autoScroll = (e) => {
+    const el = scrollerRef.current; if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (e.clientX < r.left + 90) el.scrollLeft -= 22;
+    else if (e.clientX > r.right - 90) el.scrollLeft += 22;
+  };
 
   const handleDrop = (e, stageKey) => {
     e.preventDefault();
@@ -2156,9 +2179,13 @@ function Pipeline({ obras, onOpen, onChangeEstado }) {
         <Btn small variant="ghost" onClick={() => setVerArquivo((v) => !v)}>
           {verArquivo ? "Esconder arquivadas" : `Mostrar arquivadas (${nArquivadas})`}
         </Btn>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button className="round-btn" style={{ width: 32, height: 32 }} onClick={() => deslizar(-1)} title="Deslizar para a esquerda"><ChevronLeft size={16} /></button>
+          <button className="round-btn" style={{ width: 32, height: 32 }} onClick={() => deslizar(1)} title="Deslizar para a direita"><ChevronRight size={16} /></button>
+        </div>
       </div>
 
-      <div style={{ display: "flex", gap: 14, alignItems: "flex-start", overflowX: "auto", paddingBottom: 16, margin: "0 -4px", padding: "0 4px 16px" }}>
+      <div ref={scrollerRef} className="kanban-scroll" onMouseDown={onPanDown} onDragOver={autoScroll} style={{ display: "flex", gap: 14, alignItems: "flex-start", overflowX: "auto", paddingBottom: 16, margin: "0 -4px", padding: "0 4px 16px", minHeight: "calc(100vh - 230px)", cursor: panning ? "grabbing" : "grab", userSelect: panning ? "none" : undefined }}>
         {colunas.map((stage) => {
           const items = filtradas.filter((o) => o.estado === stage.key);
           const total = items.reduce((acc, o) => acc + (valorTotalObra(o) || 0), 0);
@@ -2909,219 +2936,367 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
    CLIENTES
    ============================================================ */
 /* ============================================================
-   MODAL — FICHA DE CLIENTE
+   PESSOAS — componentes partilhados por Clientes e Fornecedores
    ============================================================ */
-function ClienteModal({ cliente, onClose, onAdd, onUpdate, onDelete, obras, onOpenObra }) {
+const iniciais = (nome) => (nome || "?").trim().split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]).join("").toUpperCase() || "?";
+
+function Avatar({ nome, size = 40, cor }) {
+  const c = cor || T.walnut;
+  return (
+    <span style={{
+      width: size, height: size, borderRadius: size * 0.3, flex: "none", display: "grid", placeItems: "center",
+      background: `linear-gradient(135deg, ${mix(c, 22)}, ${mix(c, 8)})`, border: `1px solid ${mix(c, 30)}`,
+      color: c, fontWeight: 800, fontSize: size * 0.36, letterSpacing: 0.5,
+    }}>{iniciais(nome)}</span>
+  );
+}
+
+const waLink = (tel) => {
+  const d = String(tel || "").replace(/\D/g, "");
+  if (!d) return null;
+  return `https://wa.me/${d.length === 9 ? "351" + d : d}`;
+};
+
+function ContactBtns({ telefone, email, site, size = 30 }) {
+  const itens = [
+    telefone && { href: `tel:${telefone}`, icon: Phone, t: "Ligar" },
+    waLink(telefone) && { href: waLink(telefone), icon: MessageCircle, t: "WhatsApp", ext: true },
+    email && { href: `mailto:${email}`, icon: Mail, t: "Enviar email" },
+    site && { href: /^https?:/.test(site) ? site : `https://${site}`, icon: Globe, t: "Abrir site", ext: true },
+  ].filter(Boolean);
+  if (itens.length === 0) return null;
+  return (
+    <div style={{ display: "flex", gap: 6 }}>
+      {itens.map(({ href, icon: Icon, t, ext }) => (
+        <a key={t} href={href} title={t} className="round-btn" style={{ width: size, height: size }}
+          target={ext ? "_blank" : undefined} rel={ext ? "noreferrer" : undefined} onClick={(e) => e.stopPropagation()}>
+          <Icon size={size * 0.47} />
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function MiniStat({ label, value, cor, sub }) {
+  return (
+    <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 12, padding: "11px 13px", minWidth: 0 }}>
+      <div style={{ fontSize: 11.5, fontWeight: 600, opacity: 0.55 }}>{label}</div>
+      <div style={{ fontSize: 17, fontWeight: 750, color: cor || T.walnutDark, marginTop: 3, letterSpacing: -0.3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, opacity: 0.5, marginTop: 1 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function Chip({ ativo, onClick, children }) {
+  return (
+    <button onClick={onClick} className={`chip ${ativo ? "on" : ""}`}>{children}</button>
+  );
+}
+
+function Drawer({ onClose, children, largura = 560 }) {
+  useEffect(() => {
+    const f = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", f);
+    return () => window.removeEventListener("keydown", f);
+  }, [onClose]);
+  return (
+    <div className="ui-overlay" onClick={onClose} style={{ position: "fixed", inset: 0, background: "var(--overlay)", zIndex: 100, display: "flex", justifyContent: "flex-end" }}>
+      <aside className="drawer" onClick={(e) => e.stopPropagation()} style={{ width: `min(${largura}px, 100vw)` }}>
+        {children}
+      </aside>
+    </div>
+  );
+}
+
+function DrawerHeader({ avatar, titulo, sub, onClose, children }) {
+  return (
+    <div style={{ padding: "20px 22px 16px", borderBottom: `1px solid ${T.line}`, background: `linear-gradient(180deg, ${mix(T.walnut, 7)}, transparent)` }}>
+      <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+        {avatar}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 20, fontWeight: 780, letterSpacing: -0.3, color: T.walnutDark, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{titulo}</div>
+          {sub && <div style={{ fontSize: 12.5, opacity: 0.6, marginTop: 2 }}>{sub}</div>}
+        </div>
+        <button onClick={onClose} className="round-btn" style={{ width: 32, height: 32 }} title="Fechar (Esc)"><X size={16} /></button>
+      </div>
+      {children && <div style={{ marginTop: 14 }}>{children}</div>}
+    </div>
+  );
+}
+
+function ListaLinha({ onClick, children, title }) {
+  return (
+    <div onClick={onClick} title={title} className="ui-card hoverable" style={{
+      display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: T.paper2,
+      border: `1px solid ${T.line}`, borderRadius: 11, cursor: onClick ? "pointer" : "default", fontSize: 13,
+    }}>{children}</div>
+  );
+}
+
+const obrasDoCliente = (obras, nome, ficha) => {
+  const k = normalizaNome(nome);
+  const em = (ficha?.email || "").trim().toLowerCase();
+  const nif = (ficha?.nif || "").trim();
+  return obras.filter((o) =>
+    normalizaNome(o.cliente) === k ||
+    (em && (o.clienteEmail || "").trim().toLowerCase() === em) ||
+    (nif && (o.clienteNif || "").trim() === nif)
+  );
+};
+
+const porReceberObra = (o) => (o.pagamentos || []).filter((p) => !p.pago).reduce((s, p) => s + (Number(p.valor) || 0), 0);
+
+function statsObras(lista) {
+  const s = { total: lista.length, ganhas: 0, rejeitadas: 0, negociacao: 0, valorNegociacao: 0, adjudicado: 0, porReceber: 0, ultimo: null };
+  lista.forEach((o) => {
+    if (WON_KEYS.includes(o.estado)) { s.ganhas += 1; s.adjudicado += valorTotalObra(o) || 0; s.porReceber += porReceberObra(o); }
+    if (REJECTED_KEYS.includes(o.estado)) s.rejeitadas += 1;
+    if (ACTIVE_KEYS.includes(o.estado)) { s.negociacao += 1; s.valorNegociacao += valorTotalObra(o) || 0; }
+    if (!s.ultimo || (o.dataEntrada || "") > s.ultimo) s.ultimo = o.dataEntrada;
+  });
+  const decididas = s.ganhas + s.rejeitadas;
+  s.taxa = decididas > 0 ? Math.round((s.ganhas / decididas) * 100) : null;
+  return s;
+}
+
+/* ============================================================
+   CLIENTES
+   ============================================================ */
+function ClienteDrawer({ cliente, onClose, onAdd, onUpdate, onDelete, obras, obrasDono, onOpenObra }) {
   const [id, setId] = useState(cliente.id || null);
   const [local, setLocal] = useState(cliente);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  // Se esta ficha ainda não existe na base de dados (cliente derivado só
-  // das obras, sem registo próprio), cria-a já ao abrir o modal — assim
-  // não há hipótese de duas edições seguidas (antes do primeiro "onAdd"
-  // terminar) criarem cada uma o seu próprio cliente duplicado.
+  // Cria a ficha logo ao abrir (se o cliente só existia nas obras), para duas
+  // edições seguidas não criarem duplicados.
   useEffect(() => {
-    if (!id && cliente.nome) {
-      const novoId = onAdd({ nome: cliente.nome });
-      setId(novoId);
-    }
+    if (!id && cliente.nome) setId(onAdd({ nome: cliente.nome }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const set = (patch) => setLocal((l) => ({ ...l, ...patch }));
   const commit = (patch) => {
     set(patch);
-    if (id) {
-      onUpdate(id, patch);
-    } else {
-      // Salvaguarda: só devia acontecer numa fração de segundo antes do
-      // useEffect acima terminar.
-      const novoId = onAdd({ nome: local.nome, ...patch });
-      setId(novoId);
-    }
+    if (id) onUpdate(id, patch);
+    else setId(onAdd({ nome: local.nome, ...patch }));
   };
+  const campo = (k, label, extra = {}) => (
+    <Field label={label}>
+      <input style={inputStyle} value={local[k] || ""} onChange={(e) => set({ [k]: e.target.value })} onBlur={() => commit({ [k]: local[k] })} {...extra} />
+    </Field>
+  );
+
+  const st = statsObras(obras);
+  const ordenadas = [...obras].sort((a, b) => (b.dataEntrada || "").localeCompare(a.dataEntrada || ""));
 
   return (
-    <div className="ui-overlay" style={{
-      position: "fixed", inset: 0, background: "var(--overlay)", zIndex: 100,
-      display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "4vh 16px", overflowY: "auto",
-    }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{
-        background: T.paper, borderRadius: 8, width: "100%", maxWidth: 520,
-        border: `1px solid ${T.line}`, boxShadow: "var(--shadow-lg)", overflowX: "hidden",
-      }}>
-        <div style={{ padding: "18px 24px", borderBottom: `1px solid ${T.line}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 20, fontWeight: 700, color: T.ink }}>{local.nome || "Novo cliente"}</div>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: T.ink, opacity: 0.6 }}><X size={20} /></button>
+    <Drawer onClose={onClose}>
+      <DrawerHeader onClose={onClose} avatar={<Avatar nome={local.nome} size={52} />} titulo={local.nome || "Novo cliente"}
+        sub={[local.telefone, local.email].filter(Boolean).join(" · ") || "Sem contactos — preenche abaixo"}>
+        <ContactBtns telefone={local.telefone} email={local.email} size={34} />
+      </DrawerHeader>
+
+      <div style={{ padding: "18px 22px 28px", display: "flex", flexDirection: "column", gap: 18, overflowY: "auto", flex: 1 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
+          <MiniStat label="Adjudicado" value={fmtEUR(st.adjudicado)} sub={`${st.ganhas} obra(s) ganha(s)`} />
+          <MiniStat label="Por receber" value={fmtEUR(st.porReceber)} cor={st.porReceber > 0 ? T.rust : T.green} sub="pagamentos em aberto" />
+          <MiniStat label="Em negociação" value={fmtEUR(st.valorNegociacao)} cor={T.amber} sub={`${st.negociacao} orçamento(s)`} />
+          <MiniStat label="Taxa de conversão" value={st.taxa === null ? "—" : `${st.taxa}%`} sub={`${st.ganhas} ganhas / ${st.rejeitadas} perdidas`} />
         </div>
 
-        <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
-          <Field label="Nome">
-            <input style={inputStyle} value={local.nome} onChange={(e) => set({ nome: e.target.value })} onBlur={() => commit({ nome: local.nome })} />
-          </Field>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label="Email">
-              <input type="email" style={inputStyle} value={local.email || ""} onChange={(e) => set({ email: e.target.value })} onBlur={() => commit({ email: local.email })} />
-            </Field>
-            <Field label="Telefone">
-              <input style={inputStyle} value={local.telefone || ""} onChange={(e) => set({ telefone: e.target.value })} onBlur={() => commit({ telefone: local.telefone })} />
-            </Field>
-            <Field label="NIF">
-              <input style={inputStyle} value={local.nif || ""} onChange={(e) => set({ nif: e.target.value })} onBlur={() => commit({ nif: local.nif })} />
-            </Field>
-            <Field label="Morada">
-              <input style={inputStyle} value={local.morada || ""} onChange={(e) => set({ morada: e.target.value })} onBlur={() => commit({ morada: local.morada })} />
-            </Field>
-          </div>
-          <Field label="Notas">
-            <textarea style={textareaStyle} rows={2} value={local.notas || ""} onChange={(e) => set({ notas: e.target.value })} onBlur={() => commit({ notas: local.notas })} />
-          </Field>
-          <div style={{ fontSize: 11.5, opacity: 0.55 }}>
-            Email, telefone, NIF e morada também se atualizam sozinhos quando os preenches na ficha de uma obra deste cliente.
-          </div>
-
-          <CutDivider label={`Obras (${(obras || []).length})`} />
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 260, overflowY: "auto" }}>
-            {(obras || []).length === 0 && <div style={{ fontSize: 12, opacity: 0.55 }}>Ainda sem obras registadas para este cliente.</div>}
-            {(obras || []).map((o) => {
+        <div>
+          <CutDivider label={`Obras (${obras.length})`} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {ordenadas.length === 0 && <div style={{ fontSize: 12.5, opacity: 0.55 }}>Ainda sem obras registadas para este cliente.</div>}
+            {ordenadas.map((o) => {
               const stage = stageOf(o.estado);
+              const pr = WON_KEYS.includes(o.estado) ? porReceberObra(o) : 0;
               return (
-                <div
-                  key={o.id}
-                  onClick={() => { onOpenObra(o.id); onClose(); }}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 10, padding: "8px 10px",
-                    background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 8,
-                    cursor: "pointer", fontSize: 13,
-                  }}
-                  title="Abrir ficha da obra"
-                >
+                <ListaLinha key={o.id} onClick={() => { onOpenObra(o.id); onClose(); }} title="Abrir ficha da obra">
+                  <span style={{ width: 4, alignSelf: "stretch", borderRadius: 4, background: stage.color, flex: "none" }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, color: T.navy, textDecoration: "underline", textDecorationStyle: "dotted", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {o.projeto}
-                    </div>
-                    <div style={{ fontSize: 11, opacity: 0.6, fontFamily: "'Inter', sans-serif" }}>{o.ref || "s/ ref"} · {fmtDate(o.dataEntrada)}</div>
+                    <div style={{ fontWeight: 700, color: T.walnutDark, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.projeto}</div>
+                    <div style={{ fontSize: 11.5, opacity: 0.55 }}>{o.ref || "s/ ref"} · {fmtDate(o.dataEntrada)}{pr > 0 && <span style={{ color: T.rust, fontWeight: 600 }}> · falta receber {fmtEUR(pr)}</span>}</div>
                   </div>
-                  {valorTotalObra(o) !== null && (
-                    <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 600, color: T.walnutDark, whiteSpace: "nowrap" }}>
-                      {fmtEUR(valorTotalObra(o))}
-                    </span>
-                  )}
-                  <Tag color={stage.color}>{stage.label}</Tag>
-                  <ChevronRight size={14} style={{ opacity: 0.4, flexShrink: 0 }} />
-                </div>
+                  <div style={{ textAlign: "right", display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
+                    {valorTotalObra(o) !== null && <span style={{ fontWeight: 700, color: T.walnutDark, whiteSpace: "nowrap" }}>{fmtEUR(valorTotalObra(o))}</span>}
+                    <Tag color={stage.color}>{stage.label}</Tag>
+                  </div>
+                </ListaLinha>
               );
             })}
           </div>
+        </div>
 
-          <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 10, borderTop: `1px solid ${T.line}` }}>
-            {id && (confirmDelete ? (
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <span style={{ fontSize: 12, color: T.rust }}>Eliminar esta ficha?</span>
-                <Btn small variant="danger" onClick={() => { onDelete(id); onClose(); }}>Sim, eliminar</Btn>
-                <Btn small variant="ghost" onClick={() => setConfirmDelete(false)}>Cancelar</Btn>
-              </div>
-            ) : (
-              <Btn small variant="danger" icon={Trash2} onClick={() => setConfirmDelete(true)}>Eliminar</Btn>
-            ))}
-            {!id && <span />}
-            <Btn onClick={onClose}>Fechar</Btn>
+        {obrasDono.length > 0 && (
+          <div>
+            <CutDivider label={`Como dono de obra (${obrasDono.length})`} />
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {obrasDono.map((o) => (
+                <ListaLinha key={o.id} onClick={() => { onOpenObra(o.id); onClose(); }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.projeto}</div>
+                    <div style={{ fontSize: 11.5, opacity: 0.55 }}>Via {o.cliente} · {o.ref || "s/ ref"}</div>
+                  </div>
+                  <Tag color={stageOf(o.estado).color}>{stageOf(o.estado).label}</Tag>
+                </ListaLinha>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div>
+          <CutDivider label="Dados do cliente" />
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {campo("nome", "Nome")}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              {campo("telefone", "Telefone")}
+              {campo("email", "Email", { type: "email" })}
+              {campo("nif", "NIF")}
+              {campo("morada", "Morada")}
+            </div>
+            <Field label="Notas">
+              <textarea style={textareaStyle} rows={3} value={local.notas || ""} onChange={(e) => set({ notas: e.target.value })} onBlur={() => commit({ notas: local.notas })} />
+            </Field>
+            <div style={{ fontSize: 11.5, opacity: 0.55 }}>
+              As obras ligam-se a este cliente pelo nome (ou pelo mesmo email / NIF). Os contactos também se atualizam sozinhos quando os preenches numa obra.
+            </div>
           </div>
         </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 12, borderTop: `1px solid ${T.line}` }}>
+          {id && (confirmDelete ? (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, color: T.rust }}>Eliminar esta ficha? (as obras mantêm-se)</span>
+              <Btn small variant="danger" onClick={() => { onDelete(id); onClose(); }}>Sim, eliminar</Btn>
+              <Btn small variant="ghost" onClick={() => setConfirmDelete(false)}>Cancelar</Btn>
+            </div>
+          ) : (
+            <Btn small variant="danger" icon={Trash2} onClick={() => setConfirmDelete(true)}>Eliminar ficha</Btn>
+          ))}
+          {!id && <span />}
+          <Btn onClick={onClose}>Fechar</Btn>
+        </div>
       </div>
-    </div>
+    </Drawer>
   );
 }
 
-/* ============================================================
-   CLIENTES — fichas reais (nome, NIF, morada, contacto), cruzadas
-   com estatísticas calculadas a partir das obras
-   ============================================================ */
 function Clientes({ obras, clientes, onAddCliente, onUpdateCliente, onDeleteCliente, onOpenObra }) {
   const [q, setQ] = useState("");
+  const [filtro, setFiltro] = useState("todos");
+  const [ordem, setOrdem] = useState("valor");
   const [selectedKey, setSelectedKey] = useState(null);
 
-  const lista = useMemo(() => {
-    const map = {};
-    obras.forEach((o) => {
-      const nome = (o.cliente || "—").trim();
-      const chave = normalizaNome(nome);
-      if (!map[chave]) map[chave] = { chave, nome, total: 0, ganhas: 0, rejeitadas: 0, emCurso: 0, valorAdjudicado: 0, ultimo: null };
-      const e = map[chave];
-      e.total += 1;
-      if (WON_KEYS.includes(o.estado)) { e.ganhas += 1; e.valorAdjudicado += valorTotalObra(o) || 0; }
-      if (REJECTED_KEYS.includes(o.estado)) e.rejeitadas += 1;
-      if (ACTIVE_KEYS.includes(o.estado)) e.emCurso += 1;
-      if (!e.ultimo || (o.dataEntrada || "") > e.ultimo) e.ultimo = o.dataEntrada;
+  const todos = useMemo(() => {
+    const nomes = {};
+    obras.forEach((o) => { const n = (o.cliente || "").trim(); if (n) nomes[normalizaNome(n)] = nomes[normalizaNome(n)] || n; });
+    clientes.forEach((c) => { if (c.nome) nomes[normalizaNome(c.nome)] = c.nome; });
+    return Object.entries(nomes).map(([chave, nome]) => {
+      const ficha = clientes.find((c) => normalizaNome(c.nome) === chave);
+      const obrasC = obrasDoCliente(obras, ficha?.nome || nome, ficha);
+      return { chave, nome: ficha?.nome || nome, ficha, obras: obrasC, st: statsObras(obrasC) };
     });
-    // Junta as fichas de cliente que ainda não têm nenhuma obra associada
-    clientes.forEach((c) => {
-      const chave = normalizaNome(c.nome);
-      if (!map[chave]) map[chave] = { chave, nome: c.nome, total: 0, ganhas: 0, rejeitadas: 0, emCurso: 0, valorAdjudicado: 0, ultimo: null };
-    });
-    return Object.values(map).map((e) => {
-      const ficha = clientes.find((c) => normalizaNome(c.nome) === e.chave);
-      return { ...e, nome: ficha?.nome || e.nome, ficha };
-    })
-      .filter((c) => !q || c.nome.toLowerCase().includes(q.toLowerCase()))
-      .sort((a, b) => b.total - a.total);
-  }, [obras, clientes, q]);
+  }, [obras, clientes]);
 
-  const selected = lista.find((c) => c.chave === selectedKey);
-  const obrasDoCliente = useMemo(
-    () => (selected ? obras.filter((o) => normalizaNome(o.cliente) === selected.chave)
-      .sort((a, b) => (b.dataEntrada || "").localeCompare(a.dataEntrada || "")) : []),
-    [obras, selected]
-  );
+  const lista = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    let l = todos.filter((c) => !term || `${c.nome} ${c.ficha?.email || ""} ${c.ficha?.telefone || ""} ${c.ficha?.nif || ""}`.toLowerCase().includes(term));
+    if (filtro === "negociacao") l = l.filter((c) => c.st.negociacao > 0);
+    if (filtro === "clientes") l = l.filter((c) => c.st.ganhas > 0);
+    if (filtro === "receber") l = l.filter((c) => c.st.porReceber > 0);
+    if (filtro === "incompletos") l = l.filter((c) => !c.ficha?.telefone && !c.ficha?.email);
+    const cmp = {
+      valor: (a, b) => b.st.adjudicado - a.st.adjudicado || b.st.total - a.st.total,
+      recente: (a, b) => (b.st.ultimo || "").localeCompare(a.st.ultimo || ""),
+      nome: (a, b) => a.nome.localeCompare(b.nome, "pt"),
+      obras: (a, b) => b.st.total - a.st.total,
+    }[ordem];
+    return l.sort(cmp);
+  }, [todos, q, filtro, ordem]);
+
+  const resumo = useMemo(() => ({
+    n: todos.length,
+    clientes: todos.filter((c) => c.st.ganhas > 0).length,
+    adjudicado: todos.reduce((s, c) => s + c.st.adjudicado, 0),
+    porReceber: todos.reduce((s, c) => s + c.st.porReceber, 0),
+  }), [todos]);
+
+  const selected = todos.find((c) => c.chave === selectedKey);
+  const donoObras = selected
+    ? obras.filter((o) => normalizaNome(o.donoObra) === selected.chave && !selected.obras.some((x) => x.id === o.id))
+    : [];
 
   const criarNovo = () => {
-    const id = onAddCliente({ nome: "Novo cliente" });
+    onAddCliente({ nome: "Novo cliente" });
     setSelectedKey(normalizaNome("Novo cliente"));
   };
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-        <div style={{ position: "relative", flex: "1 1 260px" }}>
-          <Search size={14} style={{ position: "absolute", left: 9, top: 9, opacity: 0.5 }} />
-          <input style={{ ...inputStyle, width: "100%", paddingLeft: 28 }} placeholder="Pesquisar cliente…" value={q} onChange={(e) => setQ(e.target.value)} />
-        </div>
-        <Btn small icon={Plus} onClick={criarNovo}>Novo cliente</Btn>
+      <div className="stagger" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 14, marginBottom: 20 }}>
+        <KpiCard icon={Building2} label="Clientes" value={resumo.n} sub={`${resumo.clientes} com obra ganha`} />
+        <KpiCard icon={Banknote} label="Valor adjudicado" value={fmtEUR(resumo.adjudicado)} sub="acumulado, ex-IVA" accent={T.green} />
+        <KpiCard icon={Receipt} label="Por receber" value={fmtEUR(resumo.porReceber)} sub="pagamentos em aberto" accent={resumo.porReceber > 0 ? T.rust : T.green} />
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12 }}>
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ position: "relative", flex: "1 1 260px", maxWidth: 380 }}>
+          <Search size={15} style={{ position: "absolute", left: 11, top: 10, opacity: 0.45 }} />
+          <input style={{ ...inputStyle, width: "100%", paddingLeft: 33 }} placeholder="Pesquisar nome, email, telefone ou NIF…" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <Chip ativo={filtro === "todos"} onClick={() => setFiltro("todos")}>Todos</Chip>
+          <Chip ativo={filtro === "negociacao"} onClick={() => setFiltro("negociacao")}>Em negociação</Chip>
+          <Chip ativo={filtro === "clientes"} onClick={() => setFiltro("clientes")}>Clientes</Chip>
+          <Chip ativo={filtro === "receber"} onClick={() => setFiltro("receber")}>Com valores a receber</Chip>
+          <Chip ativo={filtro === "incompletos"} onClick={() => setFiltro("incompletos")}>Sem contacto</Chip>
+        </div>
+        <div style={{ flex: 1 }} />
+        <select style={{ ...selectStyle, width: "auto" }} value={ordem} onChange={(e) => setOrdem(e.target.value)}>
+          <option value="valor">Ordenar: maior valor</option>
+          <option value="recente">Ordenar: mais recente</option>
+          <option value="obras">Ordenar: mais obras</option>
+          <option value="nome">Ordenar: A–Z</option>
+        </select>
+        <Btn icon={Plus} onClick={criarNovo}>Novo cliente</Btn>
+      </div>
+
+      <div className="stagger" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(290px, 1fr))", gap: 14 }}>
         {lista.map((c) => (
-          <div key={c.chave} onClick={() => setSelectedKey(c.chave)} style={{
-            background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 10, padding: "14px 16px", cursor: "pointer",
+          <div key={c.chave} className="ui-card hoverable" onClick={() => setSelectedKey(c.chave)} style={{
+            background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 16, padding: 16, cursor: "pointer", boxShadow: "var(--shadow-sm)", display: "flex", flexDirection: "column", gap: 12,
           }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-              <Building2 size={15} color={T.walnut} />
-              <span style={{ fontWeight: 700, fontSize: 14 }}>{c.nome}</span>
+            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+              <Avatar nome={c.nome} size={44} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 750, fontSize: 14.5, color: T.walnutDark, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.nome}</div>
+                <div style={{ fontSize: 12, opacity: 0.55, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {c.ficha?.email || c.ficha?.telefone || <i>sem contacto</i>}
+                </div>
+              </div>
+              {c.st.negociacao > 0 && <Tag color={T.amber}>{c.st.negociacao} em negociação</Tag>}
             </div>
-            <div style={{ display: "flex", gap: 12, fontSize: 12, opacity: 0.75, marginBottom: 6 }}>
-              <span>{c.total} pedido(s)</span>
-              <span style={{ color: T.green }}>{c.ganhas} ganho(s)</span>
-              <span style={{ color: T.rust }}>{c.rejeitadas} rejeitado(s)</span>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+              <div><div style={{ fontSize: 11, opacity: 0.5 }}>Obras</div><div style={{ fontWeight: 700, fontSize: 15 }}>{c.st.total}</div></div>
+              <div><div style={{ fontSize: 11, opacity: 0.5 }}>Adjudicado</div><div style={{ fontWeight: 700, fontSize: 15, color: c.st.adjudicado ? T.green : undefined }}>{c.st.adjudicado ? fmtEUR(c.st.adjudicado) : "—"}</div></div>
+              <div><div style={{ fontSize: 11, opacity: 0.5 }}>A receber</div><div style={{ fontWeight: 700, fontSize: 15, color: c.st.porReceber ? T.rust : undefined }}>{c.st.porReceber ? fmtEUR(c.st.porReceber) : "—"}</div></div>
             </div>
-            {c.valorAdjudicado > 0 && (
-              <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: T.walnutDark }}>{fmtEUR(c.valorAdjudicado)}</div>
-            )}
-            <div style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11.5, opacity: 0.7, marginTop: 6 }}>
-              {c.ficha?.telefone && <div style={{ display: "flex", alignItems: "center", gap: 5 }}><Phone size={11} /> {c.ficha.telefone}</div>}
-              {c.ficha?.email && <div style={{ display: "flex", alignItems: "center", gap: 5 }}><Mail size={11} /> {c.ficha.email}</div>}
-              {c.ficha?.nif && <div>NIF: {c.ficha.nif}</div>}
-              {!c.ficha && <div style={{ fontStyle: "italic", opacity: 0.6 }}>Sem ficha — clica para preencher</div>}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <ContactBtns telefone={c.ficha?.telefone} email={c.ficha?.email} />
+              <span style={{ fontSize: 11, opacity: 0.45 }}>{c.st.ultimo ? `Último pedido ${fmtDate(c.st.ultimo)}` : ""}</span>
             </div>
-            <div style={{ fontSize: 11, opacity: 0.5, marginTop: 6 }}>Último contacto: {fmtDate(c.ultimo)}</div>
           </div>
         ))}
       </div>
-      {lista.length === 0 && <div style={{ opacity: 0.5, fontSize: 13 }}>Sem resultados.</div>}
+      {lista.length === 0 && <div style={{ opacity: 0.5, fontSize: 13, padding: "24px 0" }}>Sem resultados.</div>}
 
       {selected && (
-        <ClienteModal
+        <ClienteDrawer
           key={selectedKey}
           cliente={selected.ficha || { nome: selected.nome }}
-          obras={obrasDoCliente}
+          obras={selected.obras}
+          obrasDono={donoObras}
           onOpenObra={onOpenObra}
           onClose={() => setSelectedKey(null)}
           onAdd={onAddCliente}
@@ -3134,205 +3309,266 @@ function Clientes({ obras, clientes, onAddCliente, onUpdateCliente, onDeleteClie
 }
 
 /* ============================================================
-   MODAL — FICHA DE FORNECEDOR
+   FORNECEDORES
    ============================================================ */
-function FornecedorModal({ fornecedor, onClose, onUpdate, onDelete, despesas }) {
+const fornEmAtraso = (d) => !d.pago && d.dataVencimento && d.dataVencimento < todayISO();
+
+function statsFornecedor(nome, despesas, obras) {
+  const chave = normalizaNome(nome);
+  const compras = (despesas || []).filter((d) => normalizaNome(d.fornecedor) === chave)
+    .sort((a, b) => (b.data || "").localeCompare(a.data || ""));
+  const cotacoes = [];
+  obras.forEach((o) => (o.cotacoes || []).forEach((c) => { if (normalizaNome(c.fornecedor) === chave) cotacoes.push({ ...c, obra: o }); }));
+  const obraIds = [...new Set(compras.map((d) => d.obraId).filter(Boolean))];
+  return {
+    compras, cotacoes,
+    obras: obraIds.map((id) => obras.find((o) => o.id === id)).filter(Boolean),
+    gasto: compras.reduce((s, d) => s + (Number(d.valor) || 0), 0),
+    porPagar: compras.filter((d) => !d.pago).reduce((s, d) => s + (Number(d.valor) || 0), 0),
+    atraso: compras.filter(fornEmAtraso).length,
+    cotPendentes: cotacoes.filter((c) => c.estado === "pedido").length,
+  };
+}
+
+function FornecedorDrawer({ fornecedor, onClose, onUpdate, onDelete, despesas, obras, onOpenObra }) {
   const [local, setLocal] = useState(fornecedor);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [categoriasTexto, setCategoriasTexto] = useState((fornecedor.categorias || []).join(", "));
-
   useEffect(() => { setLocal(fornecedor); setCategoriasTexto((fornecedor.categorias || []).join(", ")); }, [fornecedor]);
 
   const set = (patch) => setLocal((l) => ({ ...l, ...patch }));
   const commit = (patch) => { set(patch); onUpdate(fornecedor.id, patch); };
-
-  const commitCategorias = () => {
-    const categorias = categoriasTexto.split(",").map((c) => c.trim()).filter(Boolean);
-    commit({ categorias });
-  };
-
-  const ultimasCompras = useMemo(() => {
-    const chave = normalizaNome(fornecedor.nome);
-    return (despesas || [])
-      .filter((d) => normalizaNome(d.fornecedor) === chave)
-      .sort((a, b) => (b.data || "").localeCompare(a.data || ""))
-      .slice(0, 10);
-  }, [despesas, fornecedor.nome]);
+  const campo = (k, label, extra = {}) => (
+    <Field label={label}>
+      <input style={inputStyle} value={local[k] || ""} onChange={(e) => set({ [k]: e.target.value })} onBlur={() => commit({ [k]: local[k] })} {...extra} />
+    </Field>
+  );
+  const st = useMemo(() => statsFornecedor(fornecedor.nome, despesas, obras), [fornecedor.nome, despesas, obras]);
+  const obraNome = (id) => obras.find((o) => o.id === id);
 
   return (
-    <div className="ui-overlay" style={{
-      position: "fixed", inset: 0, background: "var(--overlay)", zIndex: 100,
-      display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "4vh 16px", overflowY: "auto",
-    }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{
-        background: T.paper, borderRadius: 8, width: "100%", maxWidth: 560,
-        border: `1px solid ${T.line}`, boxShadow: "var(--shadow-lg)",
-      }}>
-        <div style={{ padding: "18px 24px", borderBottom: `1px solid ${T.line}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 20, fontWeight: 700, color: T.ink }}>
-            {local.nome || "Novo fornecedor"}
-          </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: T.ink, opacity: 0.6 }}><X size={20} /></button>
+    <Drawer onClose={onClose}>
+      <DrawerHeader onClose={onClose} avatar={<Avatar nome={local.nome} size={52} cor={T.navy} />} titulo={local.nome || "Novo fornecedor"}
+        sub={(local.categorias || []).join(" · ") || "Sem categorias"}>
+        <ContactBtns telefone={local.telefone} email={local.email} site={local.site} size={34} />
+      </DrawerHeader>
+
+      <div style={{ padding: "18px 22px 28px", display: "flex", flexDirection: "column", gap: 18, overflowY: "auto", flex: 1 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
+          <MiniStat label="Total comprado" value={fmtEUR(st.gasto)} sub={`${st.compras.length} fatura(s)/custo(s)`} />
+          <MiniStat label="Por pagar" value={fmtEUR(st.porPagar)} cor={st.porPagar > 0 ? T.rust : T.green} sub={st.atraso > 0 ? `${st.atraso} em atraso` : "sem atrasos"} />
+          <MiniStat label="Obras ligadas" value={st.obras.length} sub="onde há compras" />
+          <MiniStat label="Cotações pedidas" value={st.cotPendentes} cor={st.cotPendentes ? T.navy : undefined} sub={`${st.cotacoes.length} no total`} />
         </div>
 
-        <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
-          <Field label="Nome do fornecedor">
-            <input style={inputStyle} value={local.nome} onChange={(e) => set({ nome: e.target.value })} onBlur={() => commit({ nome: local.nome })} />
-          </Field>
-          <Field label="O que fornece (categorias, separadas por vírgula)">
-            <input style={inputStyle} placeholder="ex: Madeiras, Ferragens, Vidros…" value={categoriasTexto} onChange={(e) => setCategoriasTexto(e.target.value)} onBlur={commitCategorias} />
-          </Field>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label="Pessoa de contacto">
-              <input style={inputStyle} value={local.pessoaContacto || ""} onChange={(e) => set({ pessoaContacto: e.target.value })} onBlur={() => commit({ pessoaContacto: local.pessoaContacto })} />
-            </Field>
-            <Field label="Telefone">
-              <input style={inputStyle} value={local.telefone || ""} onChange={(e) => set({ telefone: e.target.value })} onBlur={() => commit({ telefone: local.telefone })} />
-            </Field>
-            <Field label="Email">
-              <input type="email" style={inputStyle} value={local.email || ""} onChange={(e) => set({ email: e.target.value })} onBlur={() => commit({ email: local.email })} />
-            </Field>
-            <Field label="Site / link">
-              <input style={inputStyle} placeholder="https://…" value={local.site || ""} onChange={(e) => set({ site: e.target.value })} onBlur={() => commit({ site: local.site })} />
-            </Field>
+        <div>
+          <CutDivider label={`Faturas e compras (${st.compras.length})`} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {st.compras.length === 0 && <div style={{ fontSize: 12.5, opacity: 0.55 }}>Sem compras registadas. Aparecem aqui sozinhas quando lanças uma fatura ou custo com este nome de fornecedor.</div>}
+            {st.compras.slice(0, 25).map((c) => {
+              const ob = c.obraId ? obraNome(c.obraId) : null;
+              const atraso = fornEmAtraso(c);
+              return (
+                <ListaLinha key={c.id} onClick={ob ? () => { onOpenObra(ob.id); onClose(); } : undefined} title={ob ? "Abrir a obra" : undefined}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.descricao || c.numeroFatura || "Compra"}</div>
+                    <div style={{ fontSize: 11.5, opacity: 0.55 }}>
+                      {fmtDate(c.data)}{c.numeroFatura && ` · Fatura ${c.numeroFatura}`}{ob && <span style={{ color: T.navy, fontWeight: 600 }}> · {ob.projeto}</span>}
+                      {!c.pago && c.dataVencimento && ` · vence ${fmtDate(c.dataVencimento)}`}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right", display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
+                    <span style={{ fontWeight: 700, color: T.walnutDark, whiteSpace: "nowrap" }}>{fmtEUR(c.valor)}</span>
+                    <Tag color={c.pago ? T.green : atraso ? T.rust : T.amber}>{c.pago ? "Paga" : atraso ? "Em atraso" : "Por pagar"}</Tag>
+                  </div>
+                </ListaLinha>
+              );
+            })}
           </div>
+        </div>
 
-          <Field label="Notas (descontos, condições, morada…)">
-            <textarea style={textareaStyle} rows={2} value={local.notas || ""} onChange={(e) => set({ notas: e.target.value })} onBlur={() => commit({ notas: local.notas })} />
-          </Field>
-
-          <CutDivider label="Últimas compras" />
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {ultimasCompras.length === 0 && (
-              <div style={{ fontSize: 12, opacity: 0.55 }}>Ainda sem compras registadas a este fornecedor (aparecem aqui sozinhas assim que lançares um custo ou fatura com este nome).</div>
-            )}
-            {ultimasCompras.map((c) => (
-              <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 13 }}>
-                <span style={{ fontSize: 11, opacity: 0.55, fontFamily: "'Inter', sans-serif", whiteSpace: "nowrap" }}>{fmtDate(c.data)}</span>
-                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.descricao}</span>
-                <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 600, color: T.walnutDark, whiteSpace: "nowrap" }}>{fmtEUR(c.valor)}</span>
-              </div>
-            ))}
+        {st.cotacoes.length > 0 && (
+          <div>
+            <CutDivider label={`Cotações (${st.cotacoes.length})`} />
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {st.cotacoes.map((c) => (
+                <ListaLinha key={c.id || `${c.obra.id}-${c.material}`} onClick={() => { onOpenObra(c.obra.id); onClose(); }} title="Abrir a obra">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.material || "Cotação"}{c.quantidade && ` · ${c.quantidade}`}</div>
+                    <div style={{ fontSize: 11.5, opacity: 0.55 }}>{c.obra.projeto}</div>
+                  </div>
+                  <span style={{ fontWeight: 700 }}>{c.valor != null ? fmtEUR(c.valor) : "—"}</span>
+                  <Tag color={c.estado === "pedido" ? T.navy : T.green}>{c.estado === "pedido" ? "Pedida" : "Recebida"}</Tag>
+                </ListaLinha>
+              ))}
+            </div>
           </div>
+        )}
 
-          <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 10, borderTop: `1px solid ${T.line}` }}>
-            {confirmDelete ? (
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <span style={{ fontSize: 12, color: T.rust }}>Eliminar este fornecedor?</span>
-                <Btn small variant="danger" onClick={() => { onDelete(fornecedor.id); onClose(); }}>Sim, eliminar</Btn>
-                <Btn small variant="ghost" onClick={() => setConfirmDelete(false)}>Cancelar</Btn>
-              </div>
-            ) : (
-              <Btn small variant="danger" icon={Trash2} onClick={() => setConfirmDelete(true)}>Eliminar</Btn>
-            )}
-            <Btn onClick={onClose}>Fechar</Btn>
+        <div>
+          <CutDivider label="Dados do fornecedor" />
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {campo("nome", "Nome do fornecedor")}
+            <Field label="O que fornece (separado por vírgulas)">
+              <input style={inputStyle} placeholder="ex: Placas, Ferragens, Vidros…" value={categoriasTexto} onChange={(e) => setCategoriasTexto(e.target.value)}
+                onBlur={() => commit({ categorias: categoriasTexto.split(",").map((c) => c.trim()).filter(Boolean) })} />
+            </Field>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              {campo("pessoaContacto", "Pessoa de contacto")}
+              {campo("telefone", "Telefone")}
+              {campo("email", "Email", { type: "email" })}
+              {campo("site", "Site / link", { placeholder: "https://…" })}
+            </div>
+            <Field label="Notas (descontos, condições de pagamento, morada…)">
+              <textarea style={textareaStyle} rows={3} value={local.notas || ""} onChange={(e) => set({ notas: e.target.value })} onBlur={() => commit({ notas: local.notas })} />
+            </Field>
+            <div style={{ fontSize: 11.5, opacity: 0.55 }}>
+              As faturas e cotações ligam-se a este fornecedor pelo nome. Se mudares o nome aqui, usa o mesmo nome nas faturas novas.
+            </div>
           </div>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 12, borderTop: `1px solid ${T.line}` }}>
+          {confirmDelete ? (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, color: T.rust }}>Eliminar esta ficha? (as faturas mantêm-se)</span>
+              <Btn small variant="danger" onClick={() => { onDelete(fornecedor.id); onClose(); }}>Sim, eliminar</Btn>
+              <Btn small variant="ghost" onClick={() => setConfirmDelete(false)}>Cancelar</Btn>
+            </div>
+          ) : (
+            <Btn small variant="danger" icon={Trash2} onClick={() => setConfirmDelete(true)}>Eliminar ficha</Btn>
+          )}
+          <Btn onClick={onClose}>Fechar</Btn>
         </div>
       </div>
-    </div>
+    </Drawer>
   );
 }
 
-/* ============================================================
-   FORNECEDORES — diretório de contactos (não lista de preços)
-   ============================================================ */
-function Fornecedores({ fornecedores, onAdd, onUpdate, onDelete, despesas }) {
+function Fornecedores({ fornecedores, onAdd, onUpdate, onDelete, despesas, obras = [], onOpenObra }) {
   const [q, setQ] = useState("");
+  const [filtro, setFiltro] = useState("todos");
+  const [ordem, setOrdem] = useState("gasto");
   const [selectedId, setSelectedId] = useState(null);
-  const [expandedId, setExpandedId] = useState(null);
 
-  const comprasPorFornecedor = useMemo(() => {
-    const map = {};
-    (despesas || []).filter((d) => d.fornecedor).forEach((d) => {
-      const chave = normalizaNome(d.fornecedor);
-      (map[chave] = map[chave] || []).push(d);
+  const todos = useMemo(() => {
+    const fichas = fornecedores.map((f) => ({ f, st: statsFornecedor(f.nome, despesas, obras) }));
+    const conhecidos = new Set(fornecedores.map((f) => normalizaNome(f.nome)));
+    const semFicha = {};
+    (despesas || []).forEach((d) => {
+      const n = (d.fornecedor || "").trim();
+      if (n && !conhecidos.has(normalizaNome(n))) semFicha[normalizaNome(n)] = n;
     });
-    Object.values(map).forEach((list) => list.sort((a, b) => (b.data || "").localeCompare(a.data || "")));
-    return map;
-  }, [despesas]);
+    return {
+      fichas,
+      semFicha: Object.values(semFicha).map((nome) => ({ nome, st: statsFornecedor(nome, despesas, obras) })).sort((a, b) => b.st.gasto - a.st.gasto),
+    };
+  }, [fornecedores, despesas, obras]);
 
-  const filtrados = useMemo(() => {
-    if (!q) return fornecedores;
-    const term = q.toLowerCase();
-    return fornecedores.filter((f) =>
-      `${f.nome} ${(f.categorias || []).join(" ")} ${f.pessoaContacto || ""}`.toLowerCase().includes(term)
-    );
-  }, [fornecedores, q]);
+  const lista = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    let l = todos.fichas.filter(({ f }) => !term || `${f.nome} ${(f.categorias || []).join(" ")} ${f.pessoaContacto || ""} ${f.email || ""}`.toLowerCase().includes(term));
+    if (filtro === "pagar") l = l.filter(({ st }) => st.porPagar > 0);
+    if (filtro === "atraso") l = l.filter(({ st }) => st.atraso > 0);
+    if (filtro === "cotacoes") l = l.filter(({ st }) => st.cotPendentes > 0);
+    const cmp = {
+      gasto: (a, b) => b.st.gasto - a.st.gasto,
+      pagar: (a, b) => b.st.porPagar - a.st.porPagar,
+      nome: (a, b) => (a.f.nome || "").localeCompare(b.f.nome || "", "pt"),
+    }[ordem];
+    return l.sort(cmp);
+  }, [todos, q, filtro, ordem]);
+
+  const resumo = useMemo(() => {
+    const todosSt = [...todos.fichas.map((x) => x.st), ...todos.semFicha.map((x) => x.st)];
+    return {
+      gasto: todosSt.reduce((s, x) => s + x.gasto, 0),
+      porPagar: todosSt.reduce((s, x) => s + x.porPagar, 0),
+      atraso: todosSt.reduce((s, x) => s + x.atraso, 0),
+    };
+  }, [todos]);
 
   const selected = fornecedores.find((f) => f.id === selectedId);
-
-  const criarNovo = () => {
-    const id = onAdd({ nome: "Novo fornecedor" });
-    setSelectedId(id);
-  };
+  const criarNovo = () => setSelectedId(onAdd({ nome: "Novo fornecedor" }));
+  const criarDeNome = (nome) => setSelectedId(onAdd({ nome }));
 
   return (
     <div>
+      <div className="stagger" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 14, marginBottom: 20 }}>
+        <KpiCard icon={Building2} label="Fornecedores" value={fornecedores.length} sub={todos.semFicha.length ? `+ ${todos.semFicha.length} sem ficha` : "todos com ficha"} accent={T.navy} />
+        <KpiCard icon={Banknote} label="Total comprado" value={fmtEUR(resumo.gasto)} sub="faturas e custos registados" />
+        <KpiCard icon={Receipt} label="Por pagar" value={fmtEUR(resumo.porPagar)} sub={resumo.atraso ? `${resumo.atraso} em atraso` : "sem atrasos"} accent={resumo.atraso ? T.rust : T.green} />
+      </div>
+
       <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-        <div style={{ position: "relative", flex: "1 1 260px" }}>
-          <Search size={14} style={{ position: "absolute", left: 9, top: 9, opacity: 0.5 }} />
-          <input style={{ ...inputStyle, width: "100%", paddingLeft: 28 }} placeholder="Pesquisar fornecedor, categoria ou contacto…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <div style={{ position: "relative", flex: "1 1 260px", maxWidth: 380 }}>
+          <Search size={15} style={{ position: "absolute", left: 11, top: 10, opacity: 0.45 }} />
+          <input style={{ ...inputStyle, width: "100%", paddingLeft: 33 }} placeholder="Pesquisar fornecedor, categoria ou contacto…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
-        <Btn small icon={Plus} onClick={criarNovo}>Novo fornecedor</Btn>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <Chip ativo={filtro === "todos"} onClick={() => setFiltro("todos")}>Todos</Chip>
+          <Chip ativo={filtro === "pagar"} onClick={() => setFiltro("pagar")}>Com faturas por pagar</Chip>
+          <Chip ativo={filtro === "atraso"} onClick={() => setFiltro("atraso")}>Em atraso</Chip>
+          <Chip ativo={filtro === "cotacoes"} onClick={() => setFiltro("cotacoes")}>Cotações pendentes</Chip>
+        </div>
+        <div style={{ flex: 1 }} />
+        <select style={{ ...selectStyle, width: "auto" }} value={ordem} onChange={(e) => setOrdem(e.target.value)}>
+          <option value="gasto">Ordenar: mais comprado</option>
+          <option value="pagar">Ordenar: mais por pagar</option>
+          <option value="nome">Ordenar: A–Z</option>
+        </select>
+        <Btn icon={Plus} onClick={criarNovo}>Novo fornecedor</Btn>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
-        {filtrados.map((f) => {
-          const compras = comprasPorFornecedor[normalizaNome(f.nome)] || [];
-          const expanded = expandedId === f.id;
-          return (
-            <div key={f.id} style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 10, padding: "14px 16px" }}>
-              <div onClick={() => setSelectedId(f.id)} style={{ cursor: "pointer" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                  <Building2 size={15} color={T.walnut} />
-                  <span style={{ fontWeight: 700, fontSize: 14 }}>{f.nome || "(sem nome)"}</span>
-                </div>
-                {(f.categorias || []).length > 0 && (
-                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 8 }}>
-                    {f.categorias.map((c) => <Tag key={c} color={T.navy}>{c}</Tag>)}
-                  </div>
-                )}
-                <div style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 12.5, opacity: 0.85 }}>
-                  {f.pessoaContacto && <div>{f.pessoaContacto}</div>}
-                  {f.telefone && <div style={{ display: "flex", alignItems: "center", gap: 6 }}><Phone size={12} /> {f.telefone}</div>}
-                  {f.email && <div style={{ display: "flex", alignItems: "center", gap: 6 }}><Mail size={12} /> {f.email}</div>}
-                  {f.site && <div style={{ display: "flex", alignItems: "center", gap: 6 }}><Globe size={12} /> {f.site.replace(/^https?:\/\//, "")}</div>}
-                  {!f.pessoaContacto && !f.telefone && !f.email && !f.site && (
-                    <div style={{ opacity: 0.5, fontStyle: "italic" }}>Sem contacto registado — clica para preencher</div>
-                  )}
-                </div>
-                {f.notas && <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 6 }}>{f.notas}</div>}
+      <div className="stagger" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(290px, 1fr))", gap: 14 }}>
+        {lista.map(({ f, st }) => (
+          <div key={f.id} className="ui-card hoverable" onClick={() => setSelectedId(f.id)} style={{
+            background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 16, padding: 16, cursor: "pointer", boxShadow: "var(--shadow-sm)", display: "flex", flexDirection: "column", gap: 12,
+          }}>
+            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+              <Avatar nome={f.nome} size={44} cor={T.navy} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 750, fontSize: 14.5, color: T.walnutDark, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.nome || "(sem nome)"}</div>
+                <div style={{ fontSize: 12, opacity: 0.55, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.pessoaContacto || f.telefone || f.email || <i>sem contacto</i>}</div>
               </div>
-              {compras.length > 0 && (
-                <div style={{ marginTop: 10, borderTop: `1px solid ${T.line}`, paddingTop: 8 }}>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setExpandedId(expanded ? null : f.id); }}
-                    style={{ background: "none", border: "none", cursor: "pointer", color: T.walnutDark, fontSize: 11.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 4, padding: 0 }}
-                  >
-                    {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                    {expanded ? "Ocultar" : "Ver"} últimas compras ({compras.length})
-                  </button>
-                  {expanded && (
-                    <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
-                      {compras.slice(0, 5).map((c) => (
-                        <div key={c.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12 }}>
-                          <span style={{ opacity: 0.55, fontFamily: "'Inter', sans-serif", whiteSpace: "nowrap" }}>{fmtDate(c.data)}</span>
-                          <span style={{ opacity: 0.75, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.descricao}</span>
-                          <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 600, color: T.walnutDark, whiteSpace: "nowrap" }}>{fmtEUR(c.valor)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
+              {st.atraso > 0 && <Tag color={T.rust}>{st.atraso} em atraso</Tag>}
             </div>
-          );
-        })}
+            {(f.categorias || []).length > 0 && (
+              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                {f.categorias.slice(0, 3).map((c) => <span key={c} className="pill-soft">{c}</span>)}
+                {f.categorias.length > 3 && <span className="pill-soft">+{f.categorias.length - 3}</span>}
+              </div>
+            )}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+              <div><div style={{ fontSize: 11, opacity: 0.5 }}>Comprado</div><div style={{ fontWeight: 700, fontSize: 15 }}>{st.gasto ? fmtEUR(st.gasto) : "—"}</div></div>
+              <div><div style={{ fontSize: 11, opacity: 0.5 }}>Por pagar</div><div style={{ fontWeight: 700, fontSize: 15, color: st.porPagar ? T.rust : undefined }}>{st.porPagar ? fmtEUR(st.porPagar) : "—"}</div></div>
+              <div><div style={{ fontSize: 11, opacity: 0.5 }}>Obras</div><div style={{ fontWeight: 700, fontSize: 15 }}>{st.obras.length || "—"}</div></div>
+            </div>
+            <ContactBtns telefone={f.telefone} email={f.email} site={f.site} />
+          </div>
+        ))}
       </div>
-      {filtrados.length === 0 && <div style={{ opacity: 0.5, fontSize: 13 }}>Sem resultados.</div>}
+      {lista.length === 0 && <div style={{ opacity: 0.5, fontSize: 13, padding: "24px 0" }}>Sem resultados.</div>}
 
-      {selected && <FornecedorModal key={selected.id} fornecedor={selected} onClose={() => setSelectedId(null)} onUpdate={onUpdate} onDelete={onDelete} despesas={despesas} />}
+      {todos.semFicha.length > 0 && filtro === "todos" && !q && (
+        <>
+          <CutDivider label={`Aparecem nas faturas mas ainda sem ficha (${todos.semFicha.length})`} />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(290px, 1fr))", gap: 12 }}>
+            {todos.semFicha.map(({ nome, st }) => (
+              <div key={nome} style={{ border: `1.5px dashed ${T.line}`, borderRadius: 14, padding: "12px 14px", display: "flex", alignItems: "center", gap: 12 }}>
+                <Avatar nome={nome} size={38} cor={T.navy} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nome}</div>
+                  <div style={{ fontSize: 11.5, opacity: 0.55 }}>{st.compras.length} compra(s) · {fmtEUR(st.gasto)}</div>
+                </div>
+                <Btn small variant="ghost" icon={Plus} onClick={() => criarDeNome(nome)}>Criar ficha</Btn>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {selected && <FornecedorDrawer key={selected.id} fornecedor={selected} onClose={() => setSelectedId(null)} onUpdate={onUpdate} onDelete={onDelete} despesas={despesas} obras={obras} onOpenObra={onOpenObra} />}
     </div>
   );
 }
@@ -4431,7 +4667,7 @@ function Carpinova({ onSignOut, userEmail }) {
           {tab === "receitas" && <Receitas obras={obras} onOpenObra={setSelectedId} />}
           {tab === "faturas" && <Faturas obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onOpenObra={setSelectedId} fornecedorNomes={fornecedores.map((f) => f.nome)} />}
           {tab === "clientes" && <Clientes obras={obras} clientes={clientes} onAddCliente={addCliente} onUpdateCliente={updateCliente} onDeleteCliente={deleteCliente} onOpenObra={setSelectedId} />}
-          {tab === "fornecedores" && <Fornecedores fornecedores={fornecedores} onAdd={addFornecedor} onUpdate={updateFornecedor} onDelete={deleteFornecedor} despesas={despesas} />}
+          {tab === "fornecedores" && <Fornecedores fornecedores={fornecedores} onAdd={addFornecedor} onUpdate={updateFornecedor} onDelete={deleteFornecedor} despesas={despesas} obras={obras} onOpenObra={setSelectedId} />}
         </main>
       </div>
 
