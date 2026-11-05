@@ -5,7 +5,8 @@ import {
   Package, CheckCircle2, XCircle, Clock, Download, Building2, ChevronDown,
   ChevronRight, ChevronUp, MapPin, Euro, FileText, Users, LayoutGrid, Table as TableIcon,
   Wallet, Wrench, ArrowRight, Trash2, Save, RotateCcw, Globe, Upload, Paperclip,
-  FileSpreadsheet, Image as ImageIcon, FileType, Receipt, Banknote, Landmark, Check, Eye
+  FileSpreadsheet, Image as ImageIcon, FileType, Receipt, Banknote, Landmark, Check, Eye,
+  Menu, Moon, Sun, LogOut, MessageCircle
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -14,24 +15,25 @@ import {
 
 /* ============================================================
    DESIGN TOKENS
-   Bancada de carpintaria / prancheta técnica: papel serrado,
-   nogueira, tinta azul de risco técnico, âmbar de serradura.
+   Os valores reais vivem em src/theme.css (variáveis CSS) para
+   haver modo claro/escuro. Os nomes mantêm-se para não mexer no resto.
    ============================================================ */
 const T = {
-  ink: "#241F1A",
-  paper: "#EDE6D6",
-  paper2: "#E3D9C2",
-  paper3: "#D9CCAE",
-  walnut: "#5E3A22",
-  walnutDark: "#3E2515",
-  amber: "#BD7F22",
-  navy: "#2C3E50",
-  green: "#496B3C",
-  rust: "#9C3B24",
-  line: "#B9A97F",
+  ink: "var(--ink)",
+  paper: "var(--paper)",
+  paper2: "var(--paper2)",
+  paper3: "var(--paper3)",
+  walnut: "var(--walnut)",
+  walnutDark: "var(--walnutDark)",
+  amber: "var(--amber)",
+  navy: "var(--navy)",
+  green: "var(--green)",
+  rust: "var(--rust)",
+  line: "var(--line)",
 };
+const mix = (cor, pct) => `color-mix(in srgb, ${cor} ${pct}%, transparent)`;
 
-const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');`;
+const FONT_IMPORT = ""; // a fonte é carregada em theme.css
 
 /* ============================================================
    ESTADOS DO PIPELINE
@@ -973,21 +975,6 @@ function useAvisoSeparador(n) {
   }, [n, desenhar]);
 }
 
-/* Aviso do sistema quando chega um email novo com o CRM aberto (só se o utilizador ativar). */
-function useAvisoEmailNovo(emails, carregado) {
-  const vistos = useRef(null);
-  useEffect(() => {
-    if (!carregado) return;
-    if (vistos.current === null) { vistos.current = new Set(emails.map((e) => e.id)); return; }
-    const novos = emails.filter((e) => !vistos.current.has(e.id));
-    novos.forEach((e) => vistos.current.add(e.id));
-    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
-    novos.filter(emailNaoLido).slice(0, 3).forEach((e) => {
-      try { new Notification("Novo email — Carpinova", { body: e.assunto || "(sem assunto)" }); } catch { /* ignora */ }
-    });
-  }, [emails, carregado]);
-}
-
 /* Um email enviado por nós conta como lido. Não lido = recebido e ainda não aberto. */
 const emailNaoLido = (e) => !e.lido && e.direcao !== "saida" && e.estado !== "ignorado" && !e.resolvido;
 const emailPorTratar = (e) => !e.resolvido && e.estado !== "ignorado";
@@ -998,9 +985,8 @@ const emailPorTratar = (e) => !e.resolvido && e.estado !== "ignorado";
 function Tag({ children, color }) {
   return (
     <span style={{
-      fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 600,
-      letterSpacing: 0.3, color: "#fff", background: color, padding: "3px 8px",
-      borderRadius: 3, whiteSpace: "nowrap", display: "inline-block",
+      fontSize: 11.5, fontWeight: 600, letterSpacing: 0.1, color: "#fff", background: color,
+      padding: "3px 9px", borderRadius: 999, whiteSpace: "nowrap", display: "inline-block", lineHeight: 1.4,
     }}>
       {children}
     </span>
@@ -1009,16 +995,14 @@ function Tag({ children, color }) {
 
 function CutDivider({ label }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "28px 0 16px" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "28px 0 14px" }}>
       {label && (
         <span style={{
-          fontFamily: "'Roboto Slab', serif", fontWeight: 600, fontSize: 13,
-          letterSpacing: 1, textTransform: "uppercase", color: T.walnutDark, whiteSpace: "nowrap",
+          fontWeight: 700, fontSize: 12, letterSpacing: 0.9, textTransform: "uppercase",
+          color: T.walnutDark, opacity: 0.55, whiteSpace: "nowrap",
         }}>{label}</span>
       )}
-      <div style={{
-        flex: 1, height: 0, borderTop: `2px dashed ${T.line}`,
-      }} />
+      <div style={{ flex: 1, height: 1, background: T.line }} />
     </div>
   );
 }
@@ -1039,57 +1023,59 @@ function DeltaBadge({ atual, anterior, invertido }) {
 }
 
 function KpiCard({ icon: Icon, label, value, sub, accent, delta }) {
+  const cor = accent || T.walnut;
   return (
-    <div style={{
-      background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6,
-      padding: "16px 18px", position: "relative", overflow: "hidden",
+    <div className="ui-card hoverable" style={{
+      background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 14,
+      padding: "16px 18px", boxShadow: "var(--shadow-sm)",
     }}>
-      <div style={{ position: "absolute", top: -10, right: -10, width: 60, height: 60, borderRadius: "50%", background: T.paper, border: `1px solid ${T.line}` }} />
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, position: "relative" }}>
-        <Icon size={16} color={accent || T.walnut} />
-        <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase", color: T.ink, opacity: 0.65 }}>{label}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <span style={{ width: 32, height: 32, borderRadius: 10, background: mix(cor, 14), display: "grid", placeItems: "center", flex: "none" }}>
+          <Icon size={16} color={cor} />
+        </span>
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: T.ink, opacity: 0.6 }}>{label}</span>
       </div>
-      <div style={{ fontFamily: "'Roboto Slab', serif", fontSize: 26, fontWeight: 700, color: T.walnutDark, position: "relative" }}>{value}</div>
-      {sub && <div style={{ fontSize: 12, color: T.ink, opacity: 0.6, marginTop: 4, position: "relative" }}>{sub}</div>}
-      {delta && <div style={{ marginTop: 4, position: "relative" }}>{delta}</div>}
+      <div style={{ fontSize: 26, fontWeight: 750, letterSpacing: -0.5, color: T.walnutDark }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: T.ink, opacity: 0.55, marginTop: 4 }}>{sub}</div>}
+      {delta && <div style={{ marginTop: 4 }}>{delta}</div>}
     </div>
   );
 }
 
 function Field({ label, children }) {
   return (
-    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
-      <span style={{ fontWeight: 600, color: T.ink, opacity: 0.65, textTransform: "uppercase", letterSpacing: 0.4, fontSize: 11 }}>{label}</span>
+    <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
+      <span style={{ fontWeight: 600, color: T.ink, opacity: 0.6, fontSize: 12 }}>{label}</span>
       {children}
     </label>
   );
 }
 
 const inputStyle = {
-  fontFamily: "'Inter', sans-serif", fontSize: 13, padding: "7px 9px",
-  border: `1px solid ${T.line}`, borderRadius: 4, background: "#fff", color: T.ink,
-  outline: "none",
+  fontFamily: "'Inter', sans-serif", fontSize: 13.5, padding: "8px 11px",
+  border: `1px solid ${T.line}`, borderRadius: 9, background: T.paper2, color: T.ink,
+  outline: "none", transition: "border-color .15s, box-shadow .15s",
 };
 const selectStyle = { ...inputStyle };
 const textareaStyle = { ...inputStyle, resize: "vertical", fontFamily: "'Inter', sans-serif" };
 
 function Btn({ children, onClick, variant = "primary", icon: Icon, small, type = "button", disabled }) {
   const styles = {
-    primary: { background: T.walnut, color: "#fff", border: `1px solid ${T.walnutDark}` },
-    ghost: { background: "transparent", color: T.walnutDark, border: `1px solid ${T.line}` },
-    danger: { background: "transparent", color: T.rust, border: `1px solid ${T.rust}` },
+    primary: { background: T.walnut, color: "var(--on-primary)", border: `1px solid ${T.walnut}` },
+    ghost: { background: T.paper2, color: T.walnutDark, border: `1px solid ${T.line}` },
+    danger: { background: "transparent", color: T.rust, border: `1px solid ${mix(T.rust, 45)}` },
   };
   return (
     <button
       type={type}
       onClick={onClick}
       disabled={disabled}
+      className={`ui-btn ${variant}`}
       style={{
         ...styles[variant], fontFamily: "'Inter', sans-serif", fontWeight: 600,
-        fontSize: small ? 12 : 13, padding: small ? "5px 10px" : "8px 14px",
-        borderRadius: 4, cursor: disabled ? "not-allowed" : "pointer",
+        fontSize: small ? 12 : 13, padding: small ? "5px 11px" : "8px 15px",
+        borderRadius: 9, cursor: disabled ? "not-allowed" : "pointer",
         display: "inline-flex", alignItems: "center", gap: 6, opacity: disabled ? 0.5 : 1,
-        transition: "opacity .15s",
       }}
     >
       {Icon && <Icon size={small ? 13 : 14} />}
@@ -1129,7 +1115,7 @@ function SeguimentoObra({ obra, emails, onPatch, onEstado }) {
   return (
     <>
       <CutDivider label={arquivavel || obra.estado === "orcamentar" || obra.estado === "sem_resposta" ? "Seguimento do orçamento" : "Seguimento da obra"} />
-      <div style={{ background: obra.estado === "sem_resposta" ? "rgba(122,127,135,0.12)" : "rgba(200,138,26,0.07)", border: `1px solid ${obra.estado === "sem_resposta" ? "#7A7F87" : T.amber}`, borderRadius: 6, padding: 14, display: "flex", flexDirection: "column", gap: 10, fontSize: 13 }}>
+      <div style={{ background: obra.estado === "sem_resposta" ? mix(T.ink, 8) : mix(T.amber, 8), border: `1px solid ${obra.estado === "sem_resposta" ? "#7A7F87" : T.amber}`, borderRadius: 10, padding: 14, display: "flex", flexDirection: "column", gap: 10, fontSize: 13 }}>
         {obra.estado === "sem_resposta" ? (
           <>
             <div>Arquivado como <b>Sem resposta</b> desde <b>{fmtDate(dataFase)}</b>. Não gera lembretes nem conta no valor do pipeline.</div>
@@ -1409,30 +1395,30 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
   const stage = stageOf(local.estado);
 
   return (
-    <div style={{
-      position: "fixed", inset: 0, background: "rgba(36,31,26,0.55)", zIndex: 100,
+    <div className="ui-overlay" style={{
+      position: "fixed", inset: 0, background: "var(--overlay)", zIndex: 100,
       display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "4vh 16px", overflowY: "auto",
     }} onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: T.paper, borderRadius: 8, width: "100%", maxWidth: 760,
-          border: `1px solid ${T.line}`, boxShadow: "0 20px 50px rgba(0,0,0,0.3)", overflowX: "hidden",
+          background: T.paper, borderRadius: 18, width: "100%", maxWidth: 760,
+          border: `1px solid ${T.line}`, boxShadow: "var(--shadow-lg)", overflowX: "hidden",
         }}
       >
         {/* Header */}
         <div style={{
-          padding: "18px 24px", borderBottom: `2px dashed ${T.line}`, display: "flex",
+          padding: "18px 24px", borderBottom: `1px solid ${T.line}`, display: "flex",
           justifyContent: "space-between", alignItems: "flex-start", gap: 12,
         }}>
           <div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
-              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: T.walnutDark, fontWeight: 700 }}>
+              <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: T.walnutDark, fontWeight: 700 }}>
                 {local.ref || "SEM REFERÊNCIA"}
               </span>
               <Tag color={stage.color}>{stage.label}</Tag>
             </div>
-            <div style={{ fontFamily: "'Roboto Slab', serif", fontSize: 20, fontWeight: 700, color: T.ink }}>
+            <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 20, fontWeight: 700, color: T.ink }}>
               {local.projeto}
             </div>
             <div style={{ fontSize: 13, color: T.ink, opacity: 0.7, marginTop: 2 }}>{local.cliente}</div>
@@ -1538,7 +1524,7 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
                 </select>
               </Field>
               <Field label="Total a cobrar (com IVA)">
-                <div style={{ ...inputStyle, background: T.paper3, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 }}>
+                <div style={{ ...inputStyle, background: T.paper3, fontFamily: "'Inter', sans-serif", fontWeight: 700 }}>
                   {valorRefObra !== null ? fmtEUR(valorRefObra * fatorIva(local)) : "—"}
                 </div>
               </Field>
@@ -1552,7 +1538,7 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
               const atrasada = c.dataVencimento && !c.pago && c.dataVencimento < todayISO();
               return (
                 <div key={c.id} style={{
-                  padding: "8px 10px", background: T.paper2, border: `1px solid ${atrasada ? T.rust : T.line}`, borderRadius: 4, fontSize: 13,
+                  padding: "8px 10px", background: T.paper2, border: `1px solid ${atrasada ? T.rust : T.line}`, borderRadius: 8, fontSize: 13,
                   display: "flex", flexDirection: "column", gap: 6,
                 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.4fr) minmax(0,1fr) minmax(0,0.8fr) auto", gap: 8, alignItems: "center" }}>
@@ -1589,7 +1575,7 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
                       <option value={0}>Sem IVA</option>
                       <option value={23}>23%</option>
                     </select>
-                    {despesaPct(c) > 0 && <span style={{ opacity: 0.6, fontFamily: "'JetBrains Mono', monospace" }}>Base {fmtEUR(despesaBase(c))} + IVA {fmtEUR(despesaIvaValor(c))}</span>}
+                    {despesaPct(c) > 0 && <span style={{ opacity: 0.6, fontFamily: "'Inter', sans-serif" }}>Base {fmtEUR(despesaBase(c))} + IVA {fmtEUR(despesaIvaValor(c))}</span>}
                   </div>
                 </div>
               );
@@ -1612,27 +1598,27 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
               <input type="date" style={{ ...inputStyle, fontSize: 12 }} value={novoCusto.dataVencimento} onChange={(e) => setNovoCusto((s) => ({ ...s, dataVencimento: e.target.value }))} title="Data de vencimento (opcional)" />
             </div>
             {(custosObra.length > 0 || valorRefObra !== null) && (
-              <div style={{ display: "flex", gap: 16, marginTop: 8, padding: "10px 12px", background: T.paper3, borderRadius: 4, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 16, marginTop: 8, padding: "10px 12px", background: T.paper3, borderRadius: 8, flexWrap: "wrap" }}>
                 <div>
                   <div style={{ fontSize: 10.5, textTransform: "uppercase", opacity: 0.6, fontWeight: 600 }}>Total de custos (sem IVA)</div>
-                  <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 15, color: T.walnutDark }}>{fmtEUR(totalCustos)}</div>
+                  <div style={{ fontFamily: "'Inter', sans-serif", fontWeight: 700, fontSize: 15, color: T.walnutDark }}>{fmtEUR(totalCustos)}</div>
                 </div>
                 <div>
                   <div style={{ fontSize: 10.5, textTransform: "uppercase", opacity: 0.6, fontWeight: 600 }}>Margem real</div>
-                  <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 15, color: margemReal >= 0 ? T.green : T.rust }}>
+                  <div style={{ fontFamily: "'Inter', sans-serif", fontWeight: 700, fontSize: 15, color: margemReal >= 0 ? T.green : T.rust }}>
                     {margemReal !== null ? fmtEUR(margemReal) : "—"}
                   </div>
                 </div>
                 <div>
                   <div style={{ fontSize: 10.5, textTransform: "uppercase", opacity: 0.6, fontWeight: 600 }}>Margem real %</div>
-                  <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 15, color: margemReal >= 0 ? T.green : T.rust }}>
+                  <div style={{ fontFamily: "'Inter', sans-serif", fontWeight: 700, fontSize: 15, color: margemReal >= 0 ? T.green : T.rust }}>
                     {margemRealPct !== null ? `${margemRealPct.toFixed(1)}%` : "—"}
                   </div>
                 </div>
                 {local.tipoCliente && (
                   <div>
                     <div style={{ fontSize: 10.5, textTransform: "uppercase", opacity: 0.6, fontWeight: 600 }}>Margem sugerida</div>
-                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 15, opacity: 0.7 }}>
+                    <div style={{ fontFamily: "'Inter', sans-serif", fontWeight: 700, fontSize: 15, opacity: 0.7 }}>
                       {tipoClienteOf(local.tipoCliente)?.margem}%
                     </div>
                   </div>
@@ -1647,12 +1633,12 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
             {horasObra.map((h) => (
               <div key={h.id} style={{
                 display: "grid", gridTemplateColumns: "minmax(0,1.3fr) minmax(0,0.6fr) minmax(0,0.8fr) minmax(0,0.8fr) auto",
-                gap: 8, alignItems: "center", padding: "7px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13,
+                gap: 8, alignItems: "center", padding: "7px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 13,
               }}>
                 <span>{(equipa || []).find((m) => m.id === h.funcionarioId)?.nome || "(removido)"}</span>
-                <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{h.horas}h</span>
+                <span style={{ fontFamily: "'Inter', sans-serif" }}>{h.horas}h</span>
                 <span style={{ fontSize: 11.5, opacity: 0.6 }}>{fmtDate(h.data)}</span>
-                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: T.walnutDark }}>{fmtEUR(h.valor)}</span>
+                <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 600, color: T.walnutDark }}>{fmtEUR(h.valor)}</span>
                 <button onClick={() => onDeleteDespesa(h.id)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={13} /></button>
               </div>
             ))}
@@ -1681,8 +1667,8 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
             {(local.assistencias || []).map((a) => (
               <div key={a.id} style={{
                 display: "flex", alignItems: "center", gap: 10, padding: "7px 10px",
-                background: a.estado === "aberta" ? "rgba(156,59,36,0.08)" : T.paper2,
-                border: `1px solid ${a.estado === "aberta" ? T.rust : T.line}`, borderRadius: 4, fontSize: 13,
+                background: a.estado === "aberta" ? mix(T.rust, 9) : T.paper2,
+                border: `1px solid ${a.estado === "aberta" ? T.rust : T.line}`, borderRadius: 8, fontSize: 13,
               }}>
                 <input type="checkbox" checked={a.estado === "resolvida"} onChange={() => toggleAssistencia(a.id)} title="Marcar como resolvida" />
                 <span style={{ flex: 1, textDecoration: a.estado === "resolvida" ? "line-through" : "none", opacity: a.estado === "resolvida" ? 0.6 : 1 }}>{a.descricao}</span>
@@ -1733,7 +1719,7 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
                   {local.pagamentos.map((p, i) => (
                     <div key={i} style={{
                       padding: "7px 10px",
-                      background: p.pago ? "rgba(73,107,60,0.12)" : T.paper2, borderRadius: 4,
+                      background: p.pago ? mix(T.green, 13) : T.paper2, borderRadius: 8,
                       border: `1px solid ${T.line}`, fontSize: 13,
                       display: "flex", flexDirection: "column", gap: 6,
                     }}>
@@ -1752,7 +1738,7 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
                         </div>
                       </div>
                       {fatorIva(local) > 1 && Number(p.valor) > 0 && (
-                        <div style={{ fontSize: 11, opacity: 0.6, fontFamily: "'JetBrains Mono', monospace" }}>
+                        <div style={{ fontSize: 11, opacity: 0.6, fontFamily: "'Inter', sans-serif" }}>
                           Base {fmtEUR(semIva(local, p.valor))} + IVA {fmtEUR(Number(p.valor) - semIva(local, p.valor))}
                         </div>
                       )}
@@ -1789,17 +1775,16 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
             );
           })()}
 
-          <CutDivider label="Emails de cotação e orçamento" />
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-            {emails.filter((e) => e.obraId === obra.id).sort((a, b) => (b.data || "").localeCompare(a.data || "")).map((e) => (
-              <EmailItem key={e.id} email={e} obras={[]} onUpdate={onUpdateEmail} mostrarObra={false} />
-            ))}
-            {emails.filter((e) => e.obraId === obra.id).length === 0 && (
-              <div style={{ fontSize: 12, opacity: 0.55 }}>
-                Sem emails ligados. Liga-os a partir da aba Emails.
+          {emails.some((e) => e.obraId === obra.id) && (
+            <>
+              <CutDivider label="Emails ligados" />
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+                {emails.filter((e) => e.obraId === obra.id).sort((a, b) => (b.data || "").localeCompare(a.data || "")).map((e) => (
+                  <EmailItem key={e.id} email={e} obras={[]} onUpdate={onUpdateEmail} mostrarObra={false} />
+                ))}
               </div>
-            )}
-          </div>
+            </>
+          )}
 
           <CutDivider label="Fornecedores / Pedidos de Cotação" />
           <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
@@ -1811,7 +1796,7 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
                 display: "grid",
                 gridTemplateColumns: "minmax(0,1.1fr) minmax(0,1.1fr) minmax(0,0.55fr) minmax(0,0.8fr) minmax(0,0.9fr) auto",
                 gap: 6, alignItems: "center", minWidth: 0,
-                padding: "8px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4,
+                padding: "8px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 8,
               }}>
                 <input style={{ ...inputStyle, fontSize: 12, minWidth: 0 }} value={c.fornecedor} list="fornecedores-datalist"
                   onChange={(e) => updateCotacao(i, { fornecedor: e.target.value })} placeholder="Fornecedor" />
@@ -1844,15 +1829,15 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
             </datalist>
 
             {(local.cotacoes || []).length > 0 && (
-              <div style={{ display: "flex", gap: 16, marginTop: 8, padding: "10px 12px", background: T.paper3, borderRadius: 4, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 16, marginTop: 8, padding: "10px 12px", background: T.paper3, borderRadius: 8, flexWrap: "wrap" }}>
                 <div>
                   <div style={{ fontSize: 10.5, textTransform: "uppercase", opacity: 0.6, fontWeight: 600 }}>Total pedido nesta obra</div>
-                  <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 15, color: T.walnutDark }}>{fmtEUR(totalCotacoes)}</div>
+                  <div style={{ fontFamily: "'Inter', sans-serif", fontWeight: 700, fontSize: 15, color: T.walnutDark }}>{fmtEUR(totalCotacoes)}</div>
                 </div>
                 {cotacoesPorFornecedor.map(([nome, total]) => (
                   <div key={nome}>
                     <div style={{ fontSize: 10.5, textTransform: "uppercase", opacity: 0.6, fontWeight: 600 }}>{nome}</div>
-                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 15 }}>{fmtEUR(total)}</div>
+                    <div style={{ fontFamily: "'Inter', sans-serif", fontWeight: 700, fontSize: 15 }}>{fmtEUR(total)}</div>
                   </div>
                 ))}
               </div>
@@ -1867,7 +1852,7 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
             {(local.anexos || []).map((a) => (
               <div key={a.id} style={{
                 display: "flex", alignItems: "center", gap: 8, padding: "7px 10px",
-                background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13,
+                background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 13,
               }}>
                 {iconeAnexo(a)}
                 <a href="#" onClick={(e) => { e.preventDefault(); abrirAnexo(a); }} style={{ flex: 1, color: T.ink, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -1903,13 +1888,19 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
           <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 180, overflowY: "auto" }}>
             {(local.historico || []).slice().reverse().map((h, i) => (
               <div key={i} style={{ fontSize: 13, borderLeft: `3px solid ${T.walnut}`, paddingLeft: 10 }}>
-                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, opacity: 0.6, marginRight: 6 }}>{fmtDate(h.data)}</span>
+                <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, opacity: 0.6, marginRight: 6 }}>{fmtDate(h.data)}</span>
                 {h.texto}
               </div>
             ))}
           </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ fontSize: 12, opacity: 0.6 }}>Registar contacto:</span>
+            {[["chamada", Phone, "Chamada"], ["WhatsApp", MessageCircle, "WhatsApp"], ["email", Mail, "Email"]].map(([canal, Ico, nome]) => (
+              <Btn key={canal} small variant="ghost" icon={Ico} onClick={() => { onAddHistorico(obra.id, `Seguimento: contacto por ${canal}${novaNota.trim() ? " — " + novaNota.trim() : ""}.`); setNovaNota(""); }}>{nome}</Btn>
+            ))}
+          </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <input style={{ ...inputStyle, flex: 1 }} placeholder="Registar novo contacto / atualização…" value={novaNota} onChange={(e) => setNovaNota(e.target.value)}
+            <input style={{ ...inputStyle, flex: 1 }} placeholder="Nota opcional (junta-se ao contacto) ou atualização livre…" value={novaNota} onChange={(e) => setNovaNota(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && novaNota.trim()) { onAddHistorico(obra.id, novaNota.trim()); setNovaNota(""); } }} />
             <Btn small onClick={() => { if (novaNota.trim()) { onAddHistorico(obra.id, novaNota.trim()); setNovaNota(""); } }}>Adicionar</Btn>
           </div>
@@ -1949,13 +1940,13 @@ function NovaObraModal({ onClose, onCreate, suggestedRef, clientesNomes, refsExi
     onClose();
   };
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(36,31,26,0.55)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: T.paper, borderRadius: 8, width: "100%", maxWidth: 480, border: `1px solid ${T.line}`, padding: 24 }}>
-        <div style={{ fontFamily: "'Roboto Slab', serif", fontWeight: 700, fontSize: 18, marginBottom: 16, color: T.ink }}>Novo pedido / orçamento</div>
+    <div className="ui-overlay" style={{ position: "fixed", inset: 0, background: "var(--overlay)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: T.paper, borderRadius: 18, width: "100%", maxWidth: 480, border: `1px solid ${T.line}`, padding: 24, boxShadow: "var(--shadow-lg)" }}>
+        <div style={{ fontFamily: "'Inter', sans-serif", fontWeight: 700, fontSize: 18, marginBottom: 16, color: T.ink }}>Novo pedido / orçamento</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <Field label="Nº de orçamento (sugerido)">
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <input style={{ ...inputStyle, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, background: editRef ? "#fff" : "#f3ede3" }}
+              <input style={{ ...inputStyle, fontFamily: "'Inter', sans-serif", fontWeight: 600, background: editRef ? T.paper2 : T.paper3 }}
                 value={f.ref} readOnly={!editRef} onChange={(e) => set("ref", e.target.value)} />
               <Btn variant="ghost" onClick={() => setEditRef((v) => !v)}>{editRef ? "Confirmar" : "Alterar"}</Btn>
             </div>
@@ -2037,13 +2028,13 @@ function Painel({ obras, onOpen, emails = [], onAddHistorico, onChangeEstado }) 
       </div>
 
       <CutDivider label="Obras por estado" />
-      <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6, padding: "16px 20px", height: 260 }}>
+      <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 10, padding: "16px 20px", height: 260 }}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={porEstado} margin={{ top: 4, right: 8, left: -20, bottom: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={T.line} vertical={false} />
             <XAxis dataKey="name" tick={{ fontSize: 11, fontFamily: "Inter" }} interval={0} angle={-20} textAnchor="end" height={60} />
             <YAxis tick={{ fontSize: 11, fontFamily: "Inter" }} allowDecimals={false} />
-            <Tooltip contentStyle={{ fontFamily: "Inter", fontSize: 12, borderRadius: 4, border: `1px solid ${T.line}` }} />
+            <Tooltip contentStyle={{ fontFamily: "Inter", fontSize: 12, borderRadius: 8, border: `1px solid ${T.line}` }} />
             <Bar dataKey="valor" radius={[3, 3, 0, 0]}>
               {porEstado.map((s, i) => <Cell key={i} fill={s.color} />)}
             </Bar>
@@ -2058,10 +2049,10 @@ function Painel({ obras, onOpen, emails = [], onAddHistorico, onChangeEstado }) 
             {seguimentos.slice(0, 12).map(({ obra: o, dias, motivo }) => (
               <div key={o.id} onClick={() => onOpen(o.id)} style={{
                 display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", flexWrap: "wrap",
-                background: "rgba(200,138,26,0.08)", border: `1px solid ${T.amber}`, borderRadius: 4, cursor: "pointer", fontSize: 13,
+                background: mix(T.amber, 9), border: `1px solid ${mix(T.amber, 38)}`, borderRadius: 10, cursor: "pointer", fontSize: 13,
               }}>
                 <Clock size={15} color={T.amber} />
-                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, opacity: 0.75, minWidth: 64 }}>{dias} dias úteis</span>
+                <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, opacity: 0.75, minWidth: 64 }}>{dias} dias úteis</span>
                 <span style={{ fontWeight: 600 }}>{o.projeto}</span>
                 <span style={{ opacity: 0.6 }}>— {o.cliente}</span>
                 <Tag color={stageOf(o.estado).color}>{stageOf(o.estado).label}</Tag>
@@ -2089,11 +2080,11 @@ function Painel({ obras, onOpen, emails = [], onAddHistorico, onChangeEstado }) 
           return (
             <div key={o.id} onClick={() => onOpen(o.id)} style={{
               display: "flex", alignItems: "center", gap: 10, padding: "9px 12px",
-              background: late ? "rgba(156,59,36,0.1)" : T.paper2, border: `1px solid ${late ? T.rust : T.line}`,
-              borderRadius: 4, cursor: "pointer", fontSize: 13,
+              background: late ? mix(T.rust, 10) : T.paper2, border: `1px solid ${late ? mix(T.rust, 40) : T.line}`,
+              borderRadius: 10, cursor: "pointer", fontSize: 13,
             }}>
               {late ? <AlertTriangle size={15} color={T.rust} /> : <Clock size={15} color={T.walnut} />}
-              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, opacity: 0.7, minWidth: 78 }}>{fmtDate(o.proximaAcaoData)}</span>
+              <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, opacity: 0.7, minWidth: 78 }}>{fmtDate(o.proximaAcaoData)}</span>
               <span style={{ fontWeight: 600 }}>{o.projeto}</span>
               <span style={{ opacity: 0.6 }}>— {o.proximaAcaoTexto || "seguimento"}</span>
               <span style={{ marginLeft: "auto" }}><Tag color={stageOf(o.estado).color}>{stageOf(o.estado).label}</Tag></span>
@@ -2109,10 +2100,10 @@ function Painel({ obras, onOpen, emails = [], onAddHistorico, onChangeEstado }) 
             {assistenciasAbertas.map((a) => (
               <div key={a.id} onClick={() => onOpen(a.obraId)} style={{
                 display: "flex", alignItems: "center", gap: 10, padding: "9px 12px",
-                background: "rgba(156,59,36,0.08)", border: `1px solid ${T.rust}`, borderRadius: 4, cursor: "pointer", fontSize: 13,
+                background: mix(T.rust, 9), border: `1px solid ${mix(T.rust, 40)}`, borderRadius: 10, cursor: "pointer", fontSize: 13,
               }}>
                 <AlertTriangle size={15} color={T.rust} />
-                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, opacity: 0.7, minWidth: 78 }}>{fmtDate(a.dataReportada)}</span>
+                <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, opacity: 0.7, minWidth: 78 }}>{fmtDate(a.dataReportada)}</span>
                 <span style={{ fontWeight: 600 }}>{a.projeto}</span>
                 <span style={{ opacity: 0.6 }}>— {a.descricao}</span>
                 <span style={{ marginLeft: "auto", opacity: 0.6, fontSize: 11.5 }}>{a.cliente}</span>
@@ -2128,9 +2119,13 @@ function Painel({ obras, onOpen, emails = [], onAddHistorico, onChangeEstado }) 
 /* ============================================================
    PIPELINE (KANBAN)
    ============================================================ */
+const STAGES_ARQUIVO = ["rejeitado_nos", "rejeitado_cliente", "sem_resposta"];
+
 function Pipeline({ obras, onOpen, onChangeEstado }) {
   const [draggingId, setDraggingId] = useState(null);
   const [overStage, setOverStage] = useState(null);
+  const [q, setQ] = useState("");
+  const [verArquivo, setVerArquivo] = useState(false);
 
   const handleDrop = (e, stageKey) => {
     e.preventDefault();
@@ -2140,98 +2135,108 @@ function Pipeline({ obras, onOpen, onChangeEstado }) {
     setOverStage(null);
   };
 
+  const nq = q.trim().toLowerCase();
+  const filtradas = nq
+    ? obras.filter((o) => `${o.ref} ${o.projeto} ${o.cliente} ${o.donoObra || ""}`.toLowerCase().includes(nq))
+    : obras;
+  const nArquivadas = obras.filter((o) => STAGES_ARQUIVO.includes(o.estado)).length;
+  const colunas = STAGES.filter((st) => !STAGES_ARQUIVO.includes(st.key) || verArquivo || draggingId);
+  const valorAtivo = obras.filter((o) => !STAGES_ARQUIVO.includes(o.estado) && !["concluido"].includes(o.estado))
+    .reduce((acc, o) => acc + (valorTotalObra(o) || 0), 0);
+
   return (
-    <div style={{ display: "grid", gridTemplateColumns: `repeat(${STAGES.length}, minmax(0, 1fr))`, gap: 6, paddingBottom: 14 }}>
-      {STAGES.map((stage) => {
-        const items = obras.filter((o) => o.estado === stage.key);
-        const isOver = overStage === stage.key;
-        return (
-          <div key={stage.key} style={{ minWidth: 0 }}>
-            <div style={{
-              display: "flex", flexDirection: "column", gap: 2,
-              padding: "7px 8px", background: stage.color, borderRadius: "5px 5px 0 0",
-            }}>
-              <span style={{ color: "#fff", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.2, lineHeight: 1.25, wordBreak: "break-word" }}>{stage.label}</span>
-              <span style={{ color: "rgba(255,255,255,0.85)", fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}>{items.length}</span>
-            </div>
-            <div
-              onDragOver={(e) => { e.preventDefault(); if (overStage !== stage.key) setOverStage(stage.key); }}
-              onDragLeave={(e) => { if (e.currentTarget === e.target) setOverStage(null); }}
-              onDrop={(e) => handleDrop(e, stage.key)}
-              style={{
-                background: isOver ? "rgba(94,58,34,0.10)" : T.paper2,
-                border: `1px solid ${isOver ? T.walnut : T.line}`,
-                borderTop: "none", borderRadius: "0 0 5px 5px", padding: 6, minHeight: 240,
-                display: "flex", flexDirection: "column", gap: 6,
-                transition: "background .12s, border-color .12s",
-              }}
-            >
-              {items.map((o) => {
-                const late = isOverdue(o.proximaAcaoData, o.estado);
-                const cotacoesPendentes = (o.cotacoes || []).filter((c) => c.estado === "pedido").length;
-                const assistenciasAbertas = (o.assistencias || []).filter((a) => a.estado === "aberta").length;
-                const isDragging = draggingId === o.id;
-                return (
-                  <div
-                    key={o.id}
-                    draggable
-                    onDragStart={(e) => { e.dataTransfer.setData("text/plain", o.id); e.dataTransfer.effectAllowed = "move"; setDraggingId(o.id); }}
-                    onDragEnd={() => { setDraggingId(null); setOverStage(null); }}
-                    onClick={() => onOpen(o.id)}
-                    style={{
-                      background: "#fff", border: `1px solid ${T.line}`, borderRadius: 5, padding: "8px 9px",
-                      cursor: "grab", position: "relative", minWidth: 0,
-                      opacity: isDragging ? 0.35 : 1,
-                      transform: isDragging ? "scale(0.97)" : "scale(1)",
-                      boxShadow: isDragging ? "none" : "0 1px 2px rgba(0,0,0,0.04)",
-                      transition: "opacity .12s, transform .12s, box-shadow .12s",
-                    }}
-                  >
-                    <div style={{ position: "absolute", top: 6, right: 6, width: 8, height: 8, borderRadius: "50%", background: T.paper2, border: `1px solid ${T.line}` }} />
-                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9.5, opacity: 0.55 }}>{o.ref || "s/ ref"}</div>
-                    <div style={{ fontWeight: 700, fontSize: 12.5, color: T.ink, marginTop: 2, wordBreak: "break-word" }}>{o.projeto}</div>
-                    <div style={{ fontSize: 11.5, opacity: 0.65, marginTop: 1, wordBreak: "break-word" }}>{o.cliente}</div>
-                    {o.donoObra && o.donoObra !== o.cliente && (
-                      <div style={{ fontSize: 10.5, opacity: 0.55, marginTop: 1, fontStyle: "italic", wordBreak: "break-word" }}>Dono: {o.donoObra}</div>
-                    )}
-                    {valorTotalObra(o) !== null && (
-                      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, fontWeight: 600, marginTop: 6, color: T.walnutDark }}>
-                        {fmtEUR(valorTotalObra(o))}
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+        <div style={{ position: "relative", flex: "0 1 320px" }}>
+          <Search size={15} style={{ position: "absolute", left: 11, top: 10, opacity: 0.45 }} />
+          <input style={{ ...inputStyle, width: "100%", paddingLeft: 33 }} placeholder="Filtrar por cliente, obra ou referência…" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <span style={{ fontSize: 12.5, opacity: 0.6 }}>Em aberto: <b style={{ color: T.walnutDark, opacity: 1 }}>{fmtEUR(valorAtivo)}</b> (ex-IVA)</span>
+        <div style={{ flex: 1 }} />
+        <Btn small variant="ghost" onClick={() => setVerArquivo((v) => !v)}>
+          {verArquivo ? "Esconder arquivadas" : `Mostrar arquivadas (${nArquivadas})`}
+        </Btn>
+      </div>
+
+      <div style={{ display: "flex", gap: 14, alignItems: "flex-start", overflowX: "auto", paddingBottom: 16, margin: "0 -4px", padding: "0 4px 16px" }}>
+        {colunas.map((stage) => {
+          const items = filtradas.filter((o) => o.estado === stage.key);
+          const total = items.reduce((acc, o) => acc + (valorTotalObra(o) || 0), 0);
+          const isOver = overStage === stage.key;
+          return (
+            <div key={stage.key} style={{ flex: "0 0 280px", minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 4px 10px" }}>
+                <span style={{ width: 9, height: 9, borderRadius: "50%", background: stage.color, flex: "none" }} />
+                <span style={{ fontWeight: 700, fontSize: 13, color: T.walnutDark, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stage.label}</span>
+                <span style={{ fontSize: 11.5, fontWeight: 700, background: T.paper3, color: T.ink, borderRadius: 999, padding: "1px 8px" }}>{items.length}</span>
+              </div>
+              {total > 0 && <div style={{ fontSize: 12, opacity: 0.55, padding: "0 4px 8px", marginTop: -4 }}>{fmtEUR(total)}</div>}
+              <div
+                onDragOver={(e) => { e.preventDefault(); if (overStage !== stage.key) setOverStage(stage.key); }}
+                onDragLeave={(e) => { if (e.currentTarget === e.target) setOverStage(null); }}
+                onDrop={(e) => handleDrop(e, stage.key)}
+                style={{
+                  background: isOver ? mix(stage.color, 12) : mix(T.ink, 4),
+                  border: `1.5px ${isOver ? "solid" : "dashed"} ${isOver ? stage.color : "transparent"}`,
+                  borderTop: `3px solid ${stage.color}`, borderRadius: 12, padding: 8, minHeight: 120,
+                  display: "flex", flexDirection: "column", gap: 8, transition: "background .15s, border-color .15s",
+                }}
+              >
+                {items.map((o) => {
+                  const late = isOverdue(o.proximaAcaoData, o.estado);
+                  const cotacoesPendentes = (o.cotacoes || []).filter((c) => c.estado === "pedido").length;
+                  const assistenciasAbertas = (o.assistencias || []).filter((a) => a.estado === "aberta").length;
+                  const isDragging = draggingId === o.id;
+                  return (
+                    <div
+                      key={o.id}
+                      className="ui-card hoverable"
+                      draggable
+                      onDragStart={(e) => { e.dataTransfer.setData("text/plain", o.id); e.dataTransfer.effectAllowed = "move"; setDraggingId(o.id); }}
+                      onDragEnd={() => { setDraggingId(null); setOverStage(null); }}
+                      onClick={() => onOpen(o.id)}
+                      style={{
+                        background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 10, padding: "11px 12px",
+                        cursor: "grab", minWidth: 0, opacity: isDragging ? 0.4 : 1, boxShadow: "var(--shadow-sm)",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: T.ink, opacity: 0.5 }}>{o.ref || "sem ref."}</span>
+                        {late && <AlertTriangle size={14} color={T.rust} />}
                       </div>
-                    )}
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, gap: 6 }}>
-                      <span style={{ fontSize: 11, opacity: 0.55 }}>{fmtDate(o.dataEntrada)}</span>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        {(o.anexos || []).length > 0 && (
-                          <span title="Anexos" style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 11, color: T.walnut }}>
-                            <Paperclip size={12} /> {o.anexos.length}
-                          </span>
-                        )}
-                        {cotacoesPendentes > 0 && (
-                          <span title="Cotações por receber" style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 11, color: T.navy }}>
-                            <FileText size={12} /> {cotacoesPendentes}
-                          </span>
-                        )}
-                        {assistenciasAbertas > 0 && (
-                          <span title="Assistências em aberto" style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 11, color: T.rust }}>
-                            <AlertTriangle size={12} /> {assistenciasAbertas}
-                          </span>
-                        )}
-                        {late && <AlertTriangle size={13} color={T.rust} />}
+                      <div style={{ fontWeight: 650, fontSize: 13.5, color: T.ink, marginTop: 3, lineHeight: 1.3, wordBreak: "break-word" }}>{o.projeto}</div>
+                      <div style={{ fontSize: 12.5, opacity: 0.6, marginTop: 2, wordBreak: "break-word" }}>{o.cliente}</div>
+                      {o.donoObra && o.donoObra !== o.cliente && (
+                        <div style={{ fontSize: 11.5, opacity: 0.5, marginTop: 1, wordBreak: "break-word" }}>Dono: {o.donoObra}</div>
+                      )}
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, gap: 6 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: T.walnutDark }}>{valorTotalObra(o) !== null ? fmtEUR(valorTotalObra(o)) : <span style={{ opacity: 0.35, fontWeight: 500 }}>sem valor</span>}</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          {(o.anexos || []).length > 0 && (
+                            <span title="Anexos" style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 11, opacity: 0.65 }}><Paperclip size={12} /> {o.anexos.length}</span>
+                          )}
+                          {cotacoesPendentes > 0 && (
+                            <span title="Cotações por receber" style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 11, color: T.navy }}><FileText size={12} /> {cotacoesPendentes}</span>
+                          )}
+                          {assistenciasAbertas > 0 && (
+                            <span title="Assistências em aberto" style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 11, color: T.rust }}><AlertTriangle size={12} /> {assistenciasAbertas}</span>
+                          )}
+                          <span style={{ fontSize: 11, opacity: 0.45 }}>{fmtDate(o.dataEntrada)}</span>
+                        </div>
                       </div>
                     </div>
+                  );
+                })}
+                {items.length === 0 && (
+                  <div style={{ fontSize: 12, opacity: 0.4, textAlign: "center", padding: "22px 0" }}>
+                    {draggingId ? "Larga aqui" : "Sem obras"}
                   </div>
-                );
-              })}
-              {items.length === 0 && (
-                <div style={{ fontSize: 12, opacity: 0.4, textAlign: "center", padding: "20px 0", border: `1px dashed ${T.line}`, borderRadius: 4 }}>
-                  Larga aqui
-                </div>
-              )}
+                )}
+              </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -2288,7 +2293,7 @@ function ObrasTab({ obras, onOpen, onNew }) {
         <Btn small icon={Plus} onClick={onNew}>Nova obra</Btn>
       </div>
 
-      <div style={{ overflowX: "auto", border: `1px solid ${T.line}`, borderRadius: 6 }}>
+      <div style={{ overflowX: "auto", border: `1px solid ${T.line}`, borderRadius: 10 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ background: T.paper3, textAlign: "left" }}>
@@ -2302,15 +2307,15 @@ function ObrasTab({ obras, onOpen, onNew }) {
               const late = isOverdue(o.proximaAcaoData, o.estado);
               return (
                 <tr key={o.id} onClick={() => onOpen(o.id)} style={{
-                  cursor: "pointer", background: i % 2 ? "#fff" : T.paper,
+                  cursor: "pointer", background: i % 2 ? T.paper2 : T.paper,
                   borderTop: `1px solid ${T.line}`,
                 }}>
-                  <td style={{ padding: "9px 12px", fontFamily: "'JetBrains Mono', monospace", fontSize: 11, whiteSpace: "nowrap" }}>{o.ref || "—"}</td>
+                  <td style={{ padding: "9px 12px", fontFamily: "'Inter', sans-serif", fontSize: 11, whiteSpace: "nowrap" }}>{o.ref || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>{o.cliente}</td>
                   <td style={{ padding: "9px 12px", fontWeight: 600 }}>{o.projeto}</td>
                   <td style={{ padding: "9px 12px" }}><Tag color={stageOf(o.estado).color}>{stageOf(o.estado).label}</Tag></td>
                   <td style={{ padding: "9px 12px", whiteSpace: "nowrap" }}>{fmtDate(o.dataEntrada)}</td>
-                  <td style={{ padding: "9px 12px", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>{fmtEUR(valorTotalObra(o))}</td>
+                  <td style={{ padding: "9px 12px", fontFamily: "'Inter', sans-serif", whiteSpace: "nowrap" }}>{fmtEUR(valorTotalObra(o))}</td>
                   <td style={{ padding: "9px 12px", whiteSpace: "nowrap" }}>
                     {o.proximaAcaoData ? (
                       <span style={{ color: late ? T.rust : T.ink, fontWeight: late ? 700 : 400 }}>
@@ -2675,7 +2680,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
             return (
               <div key={i} style={{
                 display: "flex", alignItems: "center", gap: 8, padding: "8px 12px",
-                background: `${cor}18`, border: `1px solid ${cor}`, borderRadius: 4, fontSize: 13, color: T.ink,
+                background: `${cor}18`, border: `1px solid ${cor}`, borderRadius: 8, fontSize: 13, color: T.ink,
               }}>
                 <Icon size={14} color={cor} />
                 {a.texto}
@@ -2710,13 +2715,13 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
       </div>
 
       <CutDivider label={`Receita vs. Despesas por mês — ${periodoLabel}`} />
-      <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6, padding: "16px 20px", height: 280 }}>
+      <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 10, padding: "16px 20px", height: 280 }}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={dadosMensais} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={T.line} vertical={false} />
             <XAxis dataKey="mes" tick={{ fontSize: 11, fontFamily: "Inter" }} />
             <YAxis tick={{ fontSize: 11, fontFamily: "Inter" }} />
-            <Tooltip formatter={(v) => fmtEUR(v)} contentStyle={{ fontFamily: "Inter", fontSize: 12, borderRadius: 4, border: `1px solid ${T.line}` }} />
+            <Tooltip formatter={(v) => fmtEUR(v)} contentStyle={{ fontFamily: "Inter", fontSize: 12, borderRadius: 8, border: `1px solid ${T.line}` }} />
             <Legend wrapperStyle={{ fontSize: 12, fontFamily: "Inter" }} />
             <Bar dataKey="receita" name="Receita adjudicada" fill={T.green} radius={[3, 3, 0, 0]} />
             <Bar dataKey="despesa" name="Despesas" fill={T.rust} radius={[3, 3, 0, 0]} />
@@ -2725,13 +2730,13 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
       </div>
 
       <CutDivider label="Previsão de Tesouraria — próximos 6 meses" />
-      <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6, padding: "16px 20px", height: 280 }}>
+      <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 10, padding: "16px 20px", height: 280 }}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={previsaoTesouraria} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={T.line} vertical={false} />
             <XAxis dataKey="mes" tick={{ fontSize: 11, fontFamily: "Inter" }} />
             <YAxis tick={{ fontSize: 11, fontFamily: "Inter" }} />
-            <Tooltip formatter={(v) => fmtEUR(v)} contentStyle={{ fontFamily: "Inter", fontSize: 12, borderRadius: 4, border: `1px solid ${T.line}` }} />
+            <Tooltip formatter={(v) => fmtEUR(v)} contentStyle={{ fontFamily: "Inter", fontSize: 12, borderRadius: 8, border: `1px solid ${T.line}` }} />
             <Legend wrapperStyle={{ fontSize: 12, fontFamily: "Inter" }} />
             <Bar dataKey="entradas" name="Entradas previstas" fill={T.green} radius={[3, 3, 0, 0]} />
             <Bar dataKey="saidas" name="Saídas previstas" fill={T.rust} radius={[3, 3, 0, 0]} />
@@ -2749,11 +2754,11 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
           {concentracaoClientes.lista.slice(0, 6).map((c) => (
             <div key={c.cliente} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
               <span style={{ minWidth: 160, flexShrink: 0 }}>{c.cliente}</span>
-              <div style={{ flex: 1, background: T.paper3, borderRadius: 3, height: 16, position: "relative", overflow: "hidden" }}>
-                <div style={{ width: `${Math.min(c.pct, 100)}%`, height: "100%", background: c.pct >= 40 ? T.rust : T.walnut, borderRadius: 3 }} />
+              <div style={{ flex: 1, background: T.paper3, borderRadius: 10, height: 16, position: "relative", overflow: "hidden" }}>
+                <div style={{ width: `${Math.min(c.pct, 100)}%`, height: "100%", background: c.pct >= 40 ? T.rust : T.walnut, borderRadius: 10 }} />
               </div>
-              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, minWidth: 44, textAlign: "right" }}>{c.pct.toFixed(0)}%</span>
-              <span style={{ fontFamily: "'JetBrains Mono', monospace", opacity: 0.6, minWidth: 90, textAlign: "right" }}>{fmtEUR(c.valor)}</span>
+              <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 700, minWidth: 44, textAlign: "right" }}>{c.pct.toFixed(0)}%</span>
+              <span style={{ fontFamily: "'Inter', sans-serif", opacity: 0.6, minWidth: 90, textAlign: "right" }}>{fmtEUR(c.valor)}</span>
             </div>
           ))}
         </div>
@@ -2763,14 +2768,14 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
 
       <CutDivider label={`Despesas por categoria — ${periodoLabel}`} />
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1.2fr)", gap: 16, alignItems: "center" }}>
-        <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6, padding: "12px", height: 240 }}>
+        <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 10, padding: "12px", height: 240 }}>
           {despesasPorCategoria.length > 0 ? (
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie data={despesasPorCategoria} dataKey="valor" nameKey="categoria" cx="50%" cy="50%" outerRadius={85} label={(e) => `${e.categoria}`}>
                   {despesasPorCategoria.map((entry, i) => <Cell key={entry.categoria} fill={CATEGORIA_CORES[i % CATEGORIA_CORES.length]} />)}
                 </Pie>
-                <Tooltip formatter={(v) => fmtEUR(v)} contentStyle={{ fontFamily: "Inter", fontSize: 12, borderRadius: 4, border: `1px solid ${T.line}` }} />
+                <Tooltip formatter={(v) => fmtEUR(v)} contentStyle={{ fontFamily: "Inter", fontSize: 12, borderRadius: 8, border: `1px solid ${T.line}` }} />
               </PieChart>
             </ResponsiveContainer>
           ) : (
@@ -2782,7 +2787,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
             <div key={c.categoria} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
               <span style={{ width: 10, height: 10, borderRadius: "50%", background: CATEGORIA_CORES[i % CATEGORIA_CORES.length], flexShrink: 0 }} />
               <span style={{ flex: 1 }}>{c.categoria}</span>
-              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: T.walnutDark }}>{fmtEUR(c.valor)}</span>
+              <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 700, color: T.walnutDark }}>{fmtEUR(c.valor)}</span>
               <span style={{ fontSize: 11, opacity: 0.5, minWidth: 40, textAlign: "right" }}>
                 {totais.custosTotaisAno > 0 ? `${((c.valor / totais.custosTotaisAno) * 100).toFixed(0)}%` : ""}
               </span>
@@ -2792,7 +2797,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
       </div>
 
       <CutDivider label="Lucro por obra" />
-      <div style={{ overflowX: "auto", border: `1px solid ${T.line}`, borderRadius: 6 }}>
+      <div style={{ overflowX: "auto", border: `1px solid ${T.line}`, borderRadius: 10 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ background: T.paper3, textAlign: "left" }}>
@@ -2803,13 +2808,13 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
           </thead>
           <tbody>
             {lucroPorObra.map((o, i) => (
-              <tr key={o.id} style={{ background: i % 2 ? "#fff" : T.paper, borderTop: `1px solid ${T.line}` }}>
+              <tr key={o.id} style={{ background: i % 2 ? T.paper2 : T.paper, borderTop: `1px solid ${T.line}` }}>
                 <td style={{ padding: "8px 12px", fontWeight: 600 }}>{o.projeto}</td>
                 <td style={{ padding: "8px 12px" }}>{o.cliente}</td>
-                <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>{fmtEUR(o.valor)}</td>
-                <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>{fmtEUR(o.custos)}</td>
-                <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, whiteSpace: "nowrap", color: o.margem >= 0 ? T.green : T.rust }}>{fmtEUR(o.margem)}</td>
-                <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap", color: o.margem >= 0 ? T.green : T.rust }}>{o.margemPct.toFixed(1)}%</td>
+                <td style={{ padding: "8px 12px", fontFamily: "'Inter', sans-serif", whiteSpace: "nowrap" }}>{fmtEUR(o.valor)}</td>
+                <td style={{ padding: "8px 12px", fontFamily: "'Inter', sans-serif", whiteSpace: "nowrap" }}>{fmtEUR(o.custos)}</td>
+                <td style={{ padding: "8px 12px", fontFamily: "'Inter', sans-serif", fontWeight: 700, whiteSpace: "nowrap", color: o.margem >= 0 ? T.green : T.rust }}>{fmtEUR(o.margem)}</td>
+                <td style={{ padding: "8px 12px", fontFamily: "'Inter', sans-serif", whiteSpace: "nowrap", color: o.margem >= 0 ? T.green : T.rust }}>{o.margemPct.toFixed(1)}%</td>
               </tr>
             ))}
             {lucroPorObra.length === 0 && (
@@ -2825,7 +2830,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
         {(equipa || []).map((m) => (
           <div key={m.id} style={{
             display: "grid", gridTemplateColumns: "minmax(0,1.4fr) minmax(0,0.7fr) minmax(0,1.4fr) auto", gap: 8, alignItems: "center",
-            padding: "7px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13,
+            padding: "7px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 13,
           }}>
             <input style={{ ...inputStyle, fontSize: 12 }} value={m.nome} onChange={(e) => onUpdateMembro(m.id, { nome: e.target.value })} />
             <input type="number" style={{ ...inputStyle, fontSize: 12 }} placeholder="€/hora" value={m.custoHora ?? ""} onChange={(e) => onUpdateMembro(m.id, { custoHora: e.target.value === "" ? null : Number(e.target.value) })} />
@@ -2847,7 +2852,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
         {despesasGerais.map((d) => (
           <div key={d.id} style={{
             display: "grid", gridTemplateColumns: "minmax(0,1.6fr) minmax(0,1fr) minmax(0,0.8fr) minmax(0,0.9fr) auto auto", gap: 8, alignItems: "center",
-            padding: "7px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13,
+            padding: "7px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 13,
           }}>
             <input style={{ ...inputStyle, fontSize: 12 }} value={d.descricao} onChange={(e) => onUpdateDespesa(d.id, { descricao: e.target.value })} />
             <select style={{ ...selectStyle, fontSize: 12 }} value={d.categoria} onChange={(e) => onUpdateDespesa(d.id, { categoria: e.target.value })}>
@@ -2882,13 +2887,13 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {pagamentosPendentes.length === 0 && <div style={{ fontSize: 13, opacity: 0.6 }}>Sem pagamentos pendentes registados.</div>}
         {pagamentosPendentes.map((p, i) => (
-          <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13 }}>
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 13 }}>
             <Clock size={14} color={T.amber} />
             <span style={{ fontWeight: 600 }}>{p.projeto}</span>
             <span style={{ opacity: 0.6 }}>— {p.cliente}</span>
             {p.data && <span style={{ fontSize: 11.5, opacity: 0.6 }}>{fmtDate(p.data)}</span>}
-            <span style={{ marginLeft: "auto", fontFamily: "'JetBrains Mono', monospace" }}>{p.label}</span>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: T.walnutDark }}>{fmtEUR(p.valor)}</span>
+            <span style={{ marginLeft: "auto", fontFamily: "'Inter', sans-serif" }}>{p.label}</span>
+            <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 700, color: T.walnutDark }}>{fmtEUR(p.valor)}</span>
           </div>
         ))}
       </div>
@@ -2937,16 +2942,16 @@ function ClienteModal({ cliente, onClose, onAdd, onUpdate, onDelete, obras, onOp
   };
 
   return (
-    <div style={{
-      position: "fixed", inset: 0, background: "rgba(36,31,26,0.55)", zIndex: 100,
+    <div className="ui-overlay" style={{
+      position: "fixed", inset: 0, background: "var(--overlay)", zIndex: 100,
       display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "4vh 16px", overflowY: "auto",
     }} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} style={{
         background: T.paper, borderRadius: 8, width: "100%", maxWidth: 520,
-        border: `1px solid ${T.line}`, boxShadow: "0 20px 50px rgba(0,0,0,0.3)", overflowX: "hidden",
+        border: `1px solid ${T.line}`, boxShadow: "var(--shadow-lg)", overflowX: "hidden",
       }}>
-        <div style={{ padding: "18px 24px", borderBottom: `2px dashed ${T.line}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div style={{ fontFamily: "'Roboto Slab', serif", fontSize: 20, fontWeight: 700, color: T.ink }}>{local.nome || "Novo cliente"}</div>
+        <div style={{ padding: "18px 24px", borderBottom: `1px solid ${T.line}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 20, fontWeight: 700, color: T.ink }}>{local.nome || "Novo cliente"}</div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: T.ink, opacity: 0.6 }}><X size={20} /></button>
         </div>
 
@@ -2986,7 +2991,7 @@ function ClienteModal({ cliente, onClose, onAdd, onUpdate, onDelete, obras, onOp
                   onClick={() => { onOpenObra(o.id); onClose(); }}
                   style={{
                     display: "flex", alignItems: "center", gap: 10, padding: "8px 10px",
-                    background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4,
+                    background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 8,
                     cursor: "pointer", fontSize: 13,
                   }}
                   title="Abrir ficha da obra"
@@ -2995,10 +3000,10 @@ function ClienteModal({ cliente, onClose, onAdd, onUpdate, onDelete, obras, onOp
                     <div style={{ fontWeight: 700, color: T.navy, textDecoration: "underline", textDecorationStyle: "dotted", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {o.projeto}
                     </div>
-                    <div style={{ fontSize: 11, opacity: 0.6, fontFamily: "'JetBrains Mono', monospace" }}>{o.ref || "s/ ref"} · {fmtDate(o.dataEntrada)}</div>
+                    <div style={{ fontSize: 11, opacity: 0.6, fontFamily: "'Inter', sans-serif" }}>{o.ref || "s/ ref"} · {fmtDate(o.dataEntrada)}</div>
                   </div>
                   {valorTotalObra(o) !== null && (
-                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: T.walnutDark, whiteSpace: "nowrap" }}>
+                    <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 600, color: T.walnutDark, whiteSpace: "nowrap" }}>
                       {fmtEUR(valorTotalObra(o))}
                     </span>
                   )}
@@ -3086,7 +3091,7 @@ function Clientes({ obras, clientes, onAddCliente, onUpdateCliente, onDeleteClie
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12 }}>
         {lista.map((c) => (
           <div key={c.chave} onClick={() => setSelectedKey(c.chave)} style={{
-            background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6, padding: "14px 16px", cursor: "pointer",
+            background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 10, padding: "14px 16px", cursor: "pointer",
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
               <Building2 size={15} color={T.walnut} />
@@ -3098,7 +3103,7 @@ function Clientes({ obras, clientes, onAddCliente, onUpdateCliente, onDeleteClie
               <span style={{ color: T.rust }}>{c.rejeitadas} rejeitado(s)</span>
             </div>
             {c.valorAdjudicado > 0 && (
-              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, fontWeight: 700, color: T.walnutDark }}>{fmtEUR(c.valorAdjudicado)}</div>
+              <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: T.walnutDark }}>{fmtEUR(c.valorAdjudicado)}</div>
             )}
             <div style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11.5, opacity: 0.7, marginTop: 6 }}>
               {c.ficha?.telefone && <div style={{ display: "flex", alignItems: "center", gap: 5 }}><Phone size={11} /> {c.ficha.telefone}</div>}
@@ -3155,16 +3160,16 @@ function FornecedorModal({ fornecedor, onClose, onUpdate, onDelete, despesas }) 
   }, [despesas, fornecedor.nome]);
 
   return (
-    <div style={{
-      position: "fixed", inset: 0, background: "rgba(36,31,26,0.55)", zIndex: 100,
+    <div className="ui-overlay" style={{
+      position: "fixed", inset: 0, background: "var(--overlay)", zIndex: 100,
       display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "4vh 16px", overflowY: "auto",
     }} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} style={{
         background: T.paper, borderRadius: 8, width: "100%", maxWidth: 560,
-        border: `1px solid ${T.line}`, boxShadow: "0 20px 50px rgba(0,0,0,0.3)",
+        border: `1px solid ${T.line}`, boxShadow: "var(--shadow-lg)",
       }}>
-        <div style={{ padding: "18px 24px", borderBottom: `2px dashed ${T.line}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div style={{ fontFamily: "'Roboto Slab', serif", fontSize: 20, fontWeight: 700, color: T.ink }}>
+        <div style={{ padding: "18px 24px", borderBottom: `1px solid ${T.line}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 20, fontWeight: 700, color: T.ink }}>
             {local.nome || "Novo fornecedor"}
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: T.ink, opacity: 0.6 }}><X size={20} /></button>
@@ -3203,10 +3208,10 @@ function FornecedorModal({ fornecedor, onClose, onUpdate, onDelete, despesas }) 
               <div style={{ fontSize: 12, opacity: 0.55 }}>Ainda sem compras registadas a este fornecedor (aparecem aqui sozinhas assim que lançares um custo ou fatura com este nome).</div>
             )}
             {ultimasCompras.map((c) => (
-              <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13 }}>
-                <span style={{ fontSize: 11, opacity: 0.55, fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>{fmtDate(c.data)}</span>
+              <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 13 }}>
+                <span style={{ fontSize: 11, opacity: 0.55, fontFamily: "'Inter', sans-serif", whiteSpace: "nowrap" }}>{fmtDate(c.data)}</span>
                 <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.descricao}</span>
-                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: T.walnutDark, whiteSpace: "nowrap" }}>{fmtEUR(c.valor)}</span>
+                <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 600, color: T.walnutDark, whiteSpace: "nowrap" }}>{fmtEUR(c.valor)}</span>
               </div>
             ))}
           </div>
@@ -3277,7 +3282,7 @@ function Fornecedores({ fornecedores, onAdd, onUpdate, onDelete, despesas }) {
           const compras = comprasPorFornecedor[normalizaNome(f.nome)] || [];
           const expanded = expandedId === f.id;
           return (
-            <div key={f.id} style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6, padding: "14px 16px" }}>
+            <div key={f.id} style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 10, padding: "14px 16px" }}>
               <div onClick={() => setSelectedId(f.id)} style={{ cursor: "pointer" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                   <Building2 size={15} color={T.walnut} />
@@ -3300,7 +3305,7 @@ function Fornecedores({ fornecedores, onAdd, onUpdate, onDelete, despesas }) {
                 {f.notas && <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 6 }}>{f.notas}</div>}
               </div>
               {compras.length > 0 && (
-                <div style={{ marginTop: 10, borderTop: `1px dashed ${T.line}`, paddingTop: 8 }}>
+                <div style={{ marginTop: 10, borderTop: `1px solid ${T.line}`, paddingTop: 8 }}>
                   <button
                     onClick={(e) => { e.stopPropagation(); setExpandedId(expanded ? null : f.id); }}
                     style={{ background: "none", border: "none", cursor: "pointer", color: T.walnutDark, fontSize: 11.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 4, padding: 0 }}
@@ -3312,9 +3317,9 @@ function Fornecedores({ fornecedores, onAdd, onUpdate, onDelete, despesas }) {
                     <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
                       {compras.slice(0, 5).map((c) => (
                         <div key={c.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12 }}>
-                          <span style={{ opacity: 0.55, fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>{fmtDate(c.data)}</span>
+                          <span style={{ opacity: 0.55, fontFamily: "'Inter', sans-serif", whiteSpace: "nowrap" }}>{fmtDate(c.data)}</span>
                           <span style={{ opacity: 0.75, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.descricao}</span>
-                          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: T.walnutDark, whiteSpace: "nowrap" }}>{fmtEUR(c.valor)}</span>
+                          <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 600, color: T.walnutDark, whiteSpace: "nowrap" }}>{fmtEUR(c.valor)}</span>
                         </div>
                       ))}
                     </div>
@@ -3377,9 +3382,9 @@ function NovaFaturaModal({ onClose, onCreate, onUpdateDespesa, onDeleteDespesa, 
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(36,31,26,0.55)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, overflowY: "auto" }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: T.paper, borderRadius: 8, width: "100%", maxWidth: 480, border: `1px solid ${T.line}`, padding: 24, overflowX: "hidden" }}>
-        <div style={{ fontFamily: "'Roboto Slab', serif", fontWeight: 700, fontSize: 18, marginBottom: 16, color: T.ink }}>{editando ? "Editar fatura" : "Nova fatura"}</div>
+    <div className="ui-overlay" style={{ position: "fixed", inset: 0, background: "var(--overlay)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, overflowY: "auto" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: T.paper, borderRadius: 18, width: "100%", maxWidth: 480, border: `1px solid ${T.line}`, padding: 24, boxShadow: "var(--shadow-lg)", overflowX: "hidden" }}>
+        <div style={{ fontFamily: "'Inter', sans-serif", fontWeight: 700, fontSize: 18, marginBottom: 16, color: T.ink }}>{editando ? "Editar fatura" : "Nova fatura"}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
           <Field label="Fornecedor">
             <input style={inputStyle} list="fornecedores-datalist-fatura" value={f.fornecedor} onChange={(e) => set("fornecedor", e.target.value)} autoFocus />
@@ -3400,7 +3405,7 @@ function NovaFaturaModal({ onClose, onCreate, onUpdateDespesa, onDeleteDespesa, 
                 <option value={0}>Sem IVA</option>
               </select>
             </Field>
-            <div style={{ fontSize: 11.5, opacity: 0.65, alignSelf: "end", paddingBottom: 8, fontFamily: "'JetBrains Mono', monospace" }}>
+            <div style={{ fontSize: 11.5, opacity: 0.65, alignSelf: "end", paddingBottom: 8, fontFamily: "'Inter', sans-serif" }}>
               {f.valor !== "" && Number(f.ivaPct) > 0 ? `Base ${fmtEUR(Number(f.valor) / (1 + Number(f.ivaPct) / 100))} + IVA ${fmtEUR(Number(f.valor) - Number(f.valor) / (1 + Number(f.ivaPct) / 100))}` : ""}
             </div>
             <Field label="Categoria">
@@ -3530,7 +3535,7 @@ function Producao({ obras, onOpenObra }) {
         </div>
       </div>
 
-      <div style={{ border: `1px solid ${T.line}`, borderRadius: 6, overflow: "hidden", background: T.paper2 }}>
+      <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, overflow: "hidden", background: T.paper2 }}>
         {/* Cabeçalho dos meses */}
         <div style={{ display: "flex" }}>
           <div style={{ width: LABEL_WIDTH, flexShrink: 0, borderRight: `1px solid ${T.line}`, background: T.paper3 }} />
@@ -3550,7 +3555,7 @@ function Producao({ obras, onOpenObra }) {
         {linhas.map((l, i) => {
           const late = l.openEnded && l.e < hoje;
           return (
-            <div key={l.obra.id} style={{ display: "flex", borderTop: `1px solid ${T.line}`, background: i % 2 ? "#fff" : T.paper }}>
+            <div key={l.obra.id} style={{ display: "flex", borderTop: `1px solid ${T.line}`, background: i % 2 ? T.paper2 : T.paper }}>
               <div
                 onClick={() => onOpenObra(l.obra.id)}
                 style={{
@@ -3566,7 +3571,7 @@ function Producao({ obras, onOpenObra }) {
               <div style={{ flex: 1, position: "relative", minHeight: 40 }}>
                 {monthSegments.reduce((acc, m) => {
                   const prevLeft = acc.left;
-                  acc.lines.push(<div key={m.key} style={{ position: "absolute", left: `${prevLeft + m.widthPct}%`, top: 0, bottom: 0, borderLeft: `1px dashed ${T.line}` }} />);
+                  acc.lines.push(<div key={m.key} style={{ position: "absolute", left: `${prevLeft + m.widthPct}%`, top: 0, bottom: 0, borderLeft: `1px solid ${T.line}` }} />);
                   acc.left += m.widthPct;
                   return acc;
                 }, { left: 0, lines: [] }).lines}
@@ -3578,9 +3583,9 @@ function Producao({ obras, onOpenObra }) {
                   title={`${fmtDate(l.obra.dataInicioObra)} — ${l.obra.dataConclusao ? fmtDate(l.obra.dataConclusao) : "sem data de fim"}`}
                   style={{
                     position: "absolute", top: 7, bottom: 7, ...posBarra(l),
-                    background: l.obra.estado === "producao" ? T.walnut : `${T.green}99`,
+                    background: l.obra.estado === "producao" ? T.walnut : mix(T.green, 60),
                     border: l.obra.estado === "producao" ? "none" : `1px dashed ${T.green}`,
-                    borderRadius: 4, cursor: "pointer", display: "flex", alignItems: "center",
+                    borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center",
                     paddingLeft: 6, overflow: "hidden", zIndex: 3,
                     backgroundImage: l.openEnded ? `linear-gradient(to right, ${l.obra.estado === "producao" ? T.walnut : T.green} 85%, transparent 100%)` : "none",
                   }}
@@ -3607,7 +3612,7 @@ function Producao({ obras, onOpenObra }) {
             {semData.map((o) => (
               <div key={o.id} onClick={() => onOpenObra(o.id)} style={{
                 display: "flex", alignItems: "center", gap: 10, padding: "8px 12px",
-                background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, cursor: "pointer", fontSize: 13,
+                background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 8, cursor: "pointer", fontSize: 13,
               }}>
                 <AlertTriangle size={14} color={T.amber} />
                 <span style={{ fontWeight: 600 }}>{o.projeto}</span>
@@ -3710,11 +3715,11 @@ function Receitas({ obras, onOpenObra }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-        <div style={{ display: "inline-flex", border: `1px solid ${T.line}`, borderRadius: 6, overflow: "hidden" }}>
+        <div style={{ display: "inline-flex", border: `1px solid ${T.line}`, borderRadius: 10, overflow: "hidden" }}>
           {[["com", "Com IVA"], ["sem", "Sem IVA"]].map(([k, l]) => (
             <button key={k} onClick={() => setModoIva(k)} style={{
               padding: "7px 16px", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "Inter",
-              background: modoIva === k ? T.walnut : T.paper2, color: modoIva === k ? "#fff" : T.ink,
+              background: modoIva === k ? T.walnut : T.paper2, color: modoIva === k ? "var(--on-primary)" : T.ink,
             }}>{l}</button>
           ))}
         </div>
@@ -3730,13 +3735,13 @@ function Receitas({ obras, onOpenObra }) {
       </div>
 
       <CutDivider label="Faturado vs. Recebido vs. Por Receber" />
-      <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 6, padding: "16px 20px", height: 220, marginBottom: 16 }}>
+      <div style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 10, padding: "16px 20px", height: 220, marginBottom: 16 }}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={comparacao} layout="vertical" margin={{ top: 4, right: 24, left: 8, bottom: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={T.line} horizontal={false} />
             <XAxis type="number" tick={{ fontSize: 11, fontFamily: "Inter" }} tickFormatter={(v) => fmtEUR(v)} />
             <YAxis type="category" dataKey="nome" tick={{ fontSize: 12, fontFamily: "Inter", fontWeight: 600 }} width={100} />
-            <Tooltip formatter={(v) => fmtEUR(v)} contentStyle={{ fontFamily: "Inter", fontSize: 12, borderRadius: 4, border: `1px solid ${T.line}` }} />
+            <Tooltip formatter={(v) => fmtEUR(v)} contentStyle={{ fontFamily: "Inter", fontSize: 12, borderRadius: 8, border: `1px solid ${T.line}` }} />
             <Bar dataKey="valor" radius={[0, 4, 4, 0]}>
               {comparacao.map((c) => <Cell key={c.nome} fill={c.cor} />)}
             </Bar>
@@ -3747,7 +3752,7 @@ function Receitas({ obras, onOpenObra }) {
       {kpis.nAtrasadas > 0 && (
         <div style={{
           display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", marginBottom: 16,
-          background: `${T.rust}18`, border: `1px solid ${T.rust}`, borderRadius: 4, fontSize: 13,
+          background: mix(T.rust, 10), border: `1px solid ${T.rust}`, borderRadius: 8, fontSize: 13,
         }}>
           <AlertTriangle size={14} color={T.rust} />
           Há {kpis.nAtrasadas} obra(s) com pagamentos por receber já atrasados, totalizando {fmtEUR(kpis.totalAtrasado)}.
@@ -3767,7 +3772,7 @@ function Receitas({ obras, onOpenObra }) {
         </select>
       </div>
 
-      <div style={{ overflowX: "auto", border: `1px solid ${T.line}`, borderRadius: 6, marginBottom: 24 }}>
+      <div style={{ overflowX: "auto", border: `1px solid ${T.line}`, borderRadius: 10, marginBottom: 24 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ background: T.paper3, textAlign: "left" }}>
@@ -3780,7 +3785,7 @@ function Receitas({ obras, onOpenObra }) {
             {filtrados.map((o, i) => {
               const stage = stageOf(o.estado);
               return (
-                <tr key={o.obraId} style={{ background: o.atrasado ? "rgba(156,59,36,0.08)" : (i % 2 ? "#fff" : T.paper), borderTop: `1px solid ${T.line}` }}>
+                <tr key={o.obraId} style={{ background: o.atrasado ? mix(T.rust, 9) : (i % 2 ? T.paper2 : T.paper), borderTop: `1px solid ${T.line}` }}>
                   <td style={{ padding: "8px 12px" }}>
                     <button onClick={() => onOpenObra(o.obraId)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: T.navy, textDecoration: "underline", textDecorationStyle: "dotted", fontSize: 13 }}>
                       {o.projeto}
@@ -3788,15 +3793,15 @@ function Receitas({ obras, onOpenObra }) {
                   </td>
                   <td style={{ padding: "8px 12px" }}>{o.cliente}</td>
                   <td style={{ padding: "8px 12px", fontSize: 12, whiteSpace: "nowrap", opacity: 0.75 }}>{o.iva.label}</td>
-                  <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, whiteSpace: "nowrap" }}>{fmtEUR(o.valorTotal)}</td>
-                  <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap", opacity: o.faturado > 0 ? 1 : 0.3 }}>
+                  <td style={{ padding: "8px 12px", fontFamily: "'Inter', sans-serif", fontWeight: 600, whiteSpace: "nowrap" }}>{fmtEUR(o.valorTotal)}</td>
+                  <td style={{ padding: "8px 12px", fontFamily: "'Inter', sans-serif", whiteSpace: "nowrap", opacity: o.faturado > 0 ? 1 : 0.3 }}>
                     {o.faturado > 0 ? fmtEUR(o.faturado) : "—"}
                   </td>
-                  <td style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap", opacity: o.recebido > 0 ? 1 : 0.3 }}>
+                  <td style={{ padding: "8px 12px", fontFamily: "'Inter', sans-serif", whiteSpace: "nowrap", opacity: o.recebido > 0 ? 1 : 0.3 }}>
                     {o.recebido > 0 ? fmtEUR(o.recebido) : "—"}
                   </td>
                   <td style={{
-                    padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap",
+                    padding: "8px 12px", fontFamily: "'Inter', sans-serif", whiteSpace: "nowrap",
                     opacity: o.porReceber > 0 ? 1 : 0.3, color: o.atrasado ? T.rust : "inherit", fontWeight: o.atrasado ? 700 : 400,
                   }}>
                     {o.atrasado && <AlertTriangle size={12} style={{ marginRight: 4, verticalAlign: -2 }} />}
@@ -3820,10 +3825,10 @@ function Receitas({ obras, onOpenObra }) {
           <div key={m.metodo} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
             <span style={{ width: 10, height: 10, borderRadius: "50%", background: METODO_CORES[i % METODO_CORES.length], flexShrink: 0 }} />
             <span style={{ minWidth: 170 }}>{m.metodo}</span>
-            <div style={{ flex: 1, background: T.paper3, borderRadius: 3, height: 14, position: "relative", overflow: "hidden" }}>
-              <div style={{ width: `${kpis.totalRecebido > 0 ? (m.valor / kpis.totalRecebido) * 100 : 0}%`, height: "100%", background: METODO_CORES[i % METODO_CORES.length], borderRadius: 3 }} />
+            <div style={{ flex: 1, background: T.paper3, borderRadius: 10, height: 14, position: "relative", overflow: "hidden" }}>
+              <div style={{ width: `${kpis.totalRecebido > 0 ? (m.valor / kpis.totalRecebido) * 100 : 0}%`, height: "100%", background: METODO_CORES[i % METODO_CORES.length], borderRadius: 10 }} />
             </div>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, minWidth: 90, textAlign: "right" }}>{fmtEUR(m.valor)}</span>
+            <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 700, minWidth: 90, textAlign: "right" }}>{fmtEUR(m.valor)}</span>
           </div>
         ))}
       </div>
@@ -3945,7 +3950,7 @@ function Faturas({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespe
         <Btn small icon={Plus} onClick={() => setNovaFaturaOpen(true)}>Nova fatura</Btn>
       </div>
 
-      <div style={{ overflowX: "auto", border: `1px solid ${T.line}`, borderRadius: 6, marginBottom: 24 }}>
+      <div style={{ overflowX: "auto", border: `1px solid ${T.line}`, borderRadius: 10, marginBottom: 24 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ background: T.paper3, textAlign: "left" }}>
@@ -3958,9 +3963,9 @@ function Faturas({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespe
             {filtradas.map((f, i) => {
               const info = ESTADO_INFO[f.estado];
               return (
-                <tr key={f.id} style={{ background: i % 2 ? "#fff" : T.paper, borderTop: `1px solid ${T.line}` }}>
+                <tr key={f.id} style={{ background: i % 2 ? T.paper2 : T.paper, borderTop: `1px solid ${T.line}` }}>
                   <td onClick={() => setEditandoId(f.id)} style={{ padding: "8px 12px", cursor: "pointer" }} title="Clica para editar">{f.fornecedor || "—"}</td>
-                  <td onClick={() => setEditandoId(f.id)} style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", fontSize: 12, cursor: "pointer" }} title="Clica para editar">{f.numeroFatura || "—"}</td>
+                  <td onClick={() => setEditandoId(f.id)} style={{ padding: "8px 12px", fontFamily: "'Inter', sans-serif", fontSize: 12, cursor: "pointer" }} title="Clica para editar">{f.numeroFatura || "—"}</td>
                   <td style={{ padding: "8px 12px" }}>
                     {f.obraId ? (
                       <button onClick={() => onOpenObra(f.obraId)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: T.navy, textDecoration: "underline", textDecorationStyle: "dotted", fontSize: 13 }}>
@@ -3971,7 +3976,7 @@ function Faturas({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespe
                     )}
                     {f.obraCliente && <div style={{ fontSize: 11, opacity: 0.55 }}>{f.obraCliente}</div>}
                   </td>
-                  <td onClick={() => setEditandoId(f.id)} style={{ padding: "8px 12px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, whiteSpace: "nowrap", cursor: "pointer" }} title="Clica para editar">{fmtEUR(f.valor)}</td>
+                  <td onClick={() => setEditandoId(f.id)} style={{ padding: "8px 12px", fontFamily: "'Inter', sans-serif", fontWeight: 600, whiteSpace: "nowrap", cursor: "pointer" }} title="Clica para editar">{fmtEUR(f.valor)}</td>
                   <td onClick={() => setEditandoId(f.id)} style={{ padding: "8px 12px", whiteSpace: "nowrap", cursor: "pointer" }} title="Clica para editar">{f.dataVencimento ? fmtDate(f.dataVencimento) : "—"}</td>
                   <td onClick={() => setEditandoId(f.id)} style={{ padding: "8px 12px", cursor: "pointer" }} title="Clica para editar"><Tag color={info.color}>{info.label}</Tag></td>
                   <td style={{ padding: "8px 12px", textAlign: "center" }}>
@@ -4004,9 +4009,9 @@ function Faturas({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespe
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {porFornecedor.length === 0 && <div style={{ fontSize: 13, opacity: 0.6 }}>Sem valores em aberto.</div>}
         {porFornecedor.map((f) => (
-          <div key={f.fornecedor} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 4, fontSize: 13 }}>
+          <div key={f.fornecedor} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 13 }}>
             <span style={{ flex: 1, fontWeight: 600 }}>{f.fornecedor}</span>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: T.walnutDark }}>{fmtEUR(f.valor)}</span>
+            <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 700, color: T.walnutDark }}>{fmtEUR(f.valor)}</span>
           </div>
         ))}
       </div>
@@ -4073,7 +4078,7 @@ function ObraPicker({ obras, value, onChange }) {
       {open && (
         <div style={{
           position: "absolute", zIndex: 30, top: "100%", left: 0, right: 0, marginTop: 2, maxHeight: 260, overflowY: "auto",
-          background: "#fff", border: `1px solid ${T.line}`, borderRadius: 4, boxShadow: "0 4px 14px rgba(0,0,0,0.15)",
+          background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 8, boxShadow: "var(--shadow-md)",
         }}>
           {value && <div onMouseDown={() => escolher("")} style={{ padding: "7px 10px", fontSize: 12, cursor: "pointer", color: T.rust, borderBottom: `1px solid ${T.line}` }}>Desligar da obra</div>}
           {lista.map((o) => (
@@ -4096,8 +4101,8 @@ function EmailItem({ email, obras, onUpdate, onCriarObra, mostrarObra = true }) 
   const opcoes = useMemo(() => [...obras].sort((a, b) => (b.dataEntrada || "").localeCompare(a.dataEntrada || "")), [obras]);
   return (
     <div style={{
-      background: emailNaoLido(email) ? "rgba(200,138,26,0.08)" : T.paper2,
-      border: `1px solid ${emailNaoLido(email) ? T.amber : T.line}`, borderRadius: 6, fontSize: 13, minWidth: 0,
+      background: emailNaoLido(email) ? mix(T.amber, 9) : T.paper2,
+      border: `1px solid ${emailNaoLido(email) ? T.amber : T.line}`, borderRadius: 10, fontSize: 13, minWidth: 0,
       opacity: email.resolvido ? 0.6 : 1,
     }}>
       <button onClick={() => { const abrir = !aberto; setAberto(abrir); if (abrir && !email.lido) onUpdate(email.id, { lido: true }); }} style={{
@@ -4107,7 +4112,7 @@ function EmailItem({ email, obras, onUpdate, onCriarObra, mostrarObra = true }) 
         {aberto ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: emailNaoLido(email) ? 700 : 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {emailNaoLido(email) && <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: T.amber, marginRight: 7 }} />}
+            {emailNaoLido(email) && <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 8, background: T.amber, marginRight: 7 }} />}
             {email.assunto || "(sem assunto)"}
           </div>
           <div style={{ fontSize: 11.5, opacity: 0.65, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -4123,14 +4128,14 @@ function EmailItem({ email, obras, onUpdate, onCriarObra, mostrarObra = true }) 
         <div style={{ padding: "0 12px 12px 36px", display: "flex", flexDirection: "column", gap: 10 }}>
           <pre style={{
             margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "Inter", fontSize: 12.5, lineHeight: 1.5,
-            maxHeight: 280, overflowY: "auto", background: "#fff", border: `1px solid ${T.line}`, borderRadius: 4, padding: 10,
+            maxHeight: 280, overflowY: "auto", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 8, padding: 10,
           }}>{email.texto || "(sem texto)"}</pre>
           {(email.anexos || []).length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {email.anexos.map((a, i) => (
                 <a key={i} href="#" onClick={(e) => { e.preventDefault(); abrirAnexo(a); }} style={{
-                  display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", border: `1px solid ${T.line}`, borderRadius: 4,
-                  color: T.navy, textDecoration: "none", fontSize: 12, background: "#fff",
+                  display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", border: `1px solid ${T.line}`, borderRadius: 8,
+                  color: T.navy, textDecoration: "none", fontSize: 12, background: T.paper2,
                 }}><Paperclip size={12} />{a.nome}</a>
               ))}
             </div>
@@ -4151,7 +4156,7 @@ function EmailItem({ email, obras, onUpdate, onCriarObra, mostrarObra = true }) 
             {email.estado !== "ignorado" && !email.obraId && <Btn small variant="ghost" onClick={() => onUpdate(email.id, { estado: "ignorado" })}>Ignorar</Btn>}
             {email.estado === "ignorado" && <Btn small variant="ghost" onClick={() => onUpdate(email.id, { estado: "novo" })}>Repor</Btn>}
             {!email.obraId && sugerida && (
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, padding: "4px 8px", background: "#fff", border: `1px dashed ${T.walnut}`, borderRadius: 4 }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, padding: "4px 8px", background: T.paper2, border: `1px dashed ${T.walnut}`, borderRadius: 8 }}>
                 Sugestão: <b>{sugerida.ref || sugerida.projeto}</b> ({email.sugestaoMotivo})
                 <Btn small onClick={() => onUpdate(email.id, { obraId: sugerida.id, estado: "ligado", ligadoPor: "manual", sugestaoObraId: null })}>Confirmar</Btn>
               </span>
@@ -4163,78 +4168,90 @@ function EmailItem({ email, obras, onUpdate, onCriarObra, mostrarObra = true }) 
   );
 }
 
-function EmailsTab({ emails, obras, onUpdate, onUpdateMany, onCriarObra }) {
-  const [filtro, setFiltro] = useState("tratar"); // tratar | naolidos | resolvidos | ligados | ignorados | todos
+const TABS = [
+  { key: "painel", label: "Painel", icon: LayoutGrid, grupo: "Comercial" },
+  { key: "pipeline", label: "Pipeline", icon: ArrowRight, grupo: "Comercial" },
+  { key: "obras", label: "Obras", icon: TableIcon, grupo: "Comercial" },
+  { key: "clientes", label: "Clientes", icon: Users, grupo: "Comercial" },
+  { key: "producao", label: "Produção", icon: Calendar, grupo: "Oficina" },
+  { key: "financeiro", label: "Financeiro", icon: Wallet, grupo: "Finanças" },
+  { key: "receitas", label: "Receitas", icon: Banknote, grupo: "Finanças" },
+  { key: "faturas", label: "Faturas", icon: Receipt, grupo: "Finanças" },
+  { key: "fornecedores", label: "Fornecedores", icon: Package, grupo: "Finanças" },
+];
+const TAB_GRUPOS = ["Comercial", "Oficina", "Finanças"];
+
+/* ============================================================
+   PALETA DE COMANDOS (Ctrl/Cmd + K) — pesquisa global
+   ============================================================ */
+function CommandPalette({ obras, onClose, onOpenObra, onGoTab, onNovaObra, onToggleTema, onBackup }) {
   const [q, setQ] = useState("");
-  const lista = useMemo(() => {
-    return [...emails]
-      .filter((e) => {
-        if (filtro === "tratar") return emailPorTratar(e);
-        if (filtro === "naolidos") return emailNaoLido(e);
-        if (filtro === "resolvidos") return !!e.resolvido;
-        if (filtro === "ligados") return e.estado === "ligado";
-        if (filtro === "ignorados") return e.estado === "ignorado";
-        return true;
-      })
-      .filter((e) => !q || `${e.assunto} ${e.de} ${e.deEmail} ${e.texto}`.toLowerCase().includes(q.toLowerCase()))
-      .sort((a, b) => (b.data || "").localeCompare(a.data || ""));
-  }, [emails, filtro, q]);
-  const [permAviso, setPermAviso] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
-  const nNaoLidos = emails.filter(emailNaoLido).length;
-  const nPorTratar = emails.filter(emailPorTratar).length;
-  const idsNaoLidos = lista.filter(emailNaoLido).map((e) => e.id);
+  const [sel, setSel] = useState(0);
+  const listRef = useRef(null);
+  const norm = (x) => String(x || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+  const itens = useMemo(() => {
+    const nq = norm(q.trim());
+    const acoes = [
+      { id: "a-nova", grupo: "Ações", label: "Nova obra / orçamento", icon: Plus, run: onNovaObra },
+      ...TABS.map((t) => ({ id: "t-" + t.key, grupo: "Ir para", label: t.label, icon: t.icon, run: () => onGoTab(t.key) })),
+      { id: "a-tema", grupo: "Ações", label: "Alternar modo claro / escuro", icon: Moon, run: onToggleTema },
+      { id: "a-backup", grupo: "Ações", label: "Descarregar cópia de segurança", icon: Download, run: onBackup },
+    ];
+    const acoesF = nq ? acoes.filter((x) => norm(x.label).includes(nq)) : acoes.slice(0, 6);
+    const obrasF = nq
+      ? obras.filter((o) => norm(`${o.ref} ${o.projeto} ${o.cliente} ${o.clienteEmail || ""}`).includes(nq))
+          .slice(0, 8)
+          .map((o) => ({ id: "o-" + o.id, grupo: "Obras", label: `${o.ref ? o.ref + " · " : ""}${o.projeto || "Sem nome"}`, sub: `${o.cliente || ""} · ${stageOf(o.estado).label}`, icon: FileText, run: () => onOpenObra(o.id) }))
+      : [];
+    return [...obrasF, ...acoesF];
+  }, [q, obras]);
+
+  useEffect(() => { setSel(0); }, [q]);
+  useEffect(() => {
+    const el = listRef.current && listRef.current.querySelector(".cmdk-item.sel");
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest" });
+  }, [sel]);
+
+  const executar = (it) => { if (!it) return; onClose(); it.run(); };
+  const onKey = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); onClose(); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); setSel((i) => Math.min(i + 1, itens.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setSel((i) => Math.max(i - 1, 0)); }
+    else if (e.key === "Enter") { e.preventDefault(); executar(itens[sel]); }
+  };
+
+  let ultimoGrupo = null;
   return (
-    <div>
-      <div style={{ fontSize: 13, opacity: 0.7, marginBottom: 14 }}>
-        Só entram aqui os emails de cotação e orçamento (recebidos e enviados). Abrir um email marca-o como lido; quando o pedido estiver tratado, marca-o como resolvido e ele sai da lista "Por tratar". Nada se liga sozinho: quando o assunto tem o número de uma obra, ou o email é o de um cliente, aparece uma sugestão que confirmas com um clique.
-      </div>
-      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
-        <div style={{ position: "relative", flex: "1 1 240px" }}>
-          <Search size={14} style={{ position: "absolute", left: 9, top: 9, opacity: 0.5 }} />
-          <input style={{ ...inputStyle, width: "100%", paddingLeft: 28 }} placeholder="Pesquisar assunto, remetente, texto…" value={q} onChange={(e) => setQ(e.target.value)} />
+    <div className="cmdk-overlay" onClick={onClose}>
+      <div className="cmdk" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Pesquisa global">
+        <input className="cmdk-input" autoFocus placeholder="Pesquisar obras, clientes, referências ou ações…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey} />
+        <div className="cmdk-list" ref={listRef}>
+          {itens.length === 0 && <div className="cmdk-empty">Nada encontrado para “{q}”.</div>}
+          {itens.map((it, i) => {
+            const cab = it.grupo !== ultimoGrupo; ultimoGrupo = it.grupo;
+            const Icon = it.icon;
+            return (
+              <React.Fragment key={it.id}>
+                {cab && <div className="cmdk-group">{it.grupo}</div>}
+                <button className={"cmdk-item" + (i === sel ? " sel" : "")} onMouseEnter={() => setSel(i)} onClick={() => executar(it)}>
+                  <Icon size={16} style={{ opacity: 0.65, flex: "none" }} />
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.label}</span>
+                  {it.sub && <small>{it.sub}</small>}
+                </button>
+              </React.Fragment>
+            );
+          })}
         </div>
-        <select style={selectStyle} value={filtro} onChange={(e) => setFiltro(e.target.value)}>
-          <option value="tratar">Por tratar ({nPorTratar})</option>
-          <option value="naolidos">Não lidos ({nNaoLidos})</option>
-          <option value="resolvidos">Resolvidos</option>
-          <option value="ligados">Ligados a obras</option>
-          <option value="ignorados">Ignorados</option>
-          <option value="todos">Todos</option>
-        </select>
-        {permAviso === "default" && (
-          <Btn small variant="ghost" onClick={() => Notification.requestPermission().then(setPermAviso)}>Ativar avisos de emails novos</Btn>
-        )}
-        {idsNaoLidos.length > 0 && onUpdateMany && (
-          <Btn small variant="ghost" icon={Eye} onClick={() => onUpdateMany(idsNaoLidos, { lido: true })}>Marcar estes como lidos</Btn>
-        )}
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {lista.map((e) => <EmailItem key={e.id} email={e} obras={obras} onUpdate={onUpdate} onCriarObra={onCriarObra} />)}
-        {lista.length === 0 && (
-          <div style={{ padding: 28, textAlign: "center", opacity: 0.55, fontSize: 13 }}>
-            {emails.length === 0 ? "Ainda não chegou nenhum email. A sincronização corre sozinha a cada 15 minutos." : "Nada neste filtro."}
-          </div>
-        )}
+        <div className="cmdk-foot">
+          <span><kbd>↑</kbd> <kbd>↓</kbd> navegar</span>
+          <span><kbd>Enter</kbd> abrir</span>
+          <span><kbd>Esc</kbd> fechar</span>
+        </div>
       </div>
     </div>
   );
 }
-
-/* ============================================================
-   APP PRINCIPAL
-   ============================================================ */
-const TABS = [
-  { key: "painel", label: "Painel", icon: LayoutGrid },
-  { key: "pipeline", label: "Pipeline", icon: ArrowRight },
-  { key: "obras", label: "Obras", icon: TableIcon },
-  { key: "emails", label: "Emails", icon: Mail },
-  { key: "producao", label: "Produção", icon: Calendar },
-  { key: "financeiro", label: "Financeiro", icon: Wallet },
-  { key: "receitas", label: "Receitas", icon: Banknote },
-  { key: "faturas", label: "Faturas", icon: Receipt },
-  { key: "clientes", label: "Clientes", icon: Users },
-  { key: "fornecedores", label: "Fornecedores", icon: Package },
-];
 
 /* ============================================================
    LOGIN — autenticação real via Supabase Auth. Sem isto, qualquer
@@ -4258,28 +4275,21 @@ function Login() {
   };
 
   return (
-    <div style={{
-      fontFamily: "'Inter', sans-serif", background: T.paper, minHeight: "100vh",
-      display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
-    }}>
-      <style>{FONT_IMPORT}</style>
-      <style>{`* { box-sizing: border-box; } input { min-width: 0; }`}</style>
-      <form onSubmit={entrar} style={{
-        background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 8, padding: 32,
-        width: "100%", maxWidth: 360, boxShadow: "0 20px 50px rgba(0,0,0,0.15)",
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24 }}>
-          <div style={{ width: 34, height: 34, borderRadius: "50%", background: T.amber, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <Wrench size={16} color="#fff" />
+    <div className="login-wrap">
+      <form onSubmit={entrar} className="login-card">
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 26 }}>
+          <div className="brand-logo"><Wrench size={18} color="var(--brand-fg)" /></div>
+          <div>
+            <div className="brand-name" style={{ fontSize: 18 }}>Carpinova</div>
+            <div className="brand-sub">Controlo de obras & orçamentos</div>
           </div>
-          <div style={{ fontFamily: "'Roboto Slab', serif", fontWeight: 700, fontSize: 18, color: T.ink }}>Carpinova CRM</div>
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Field label="Email">
-            <input type="email" required style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />
+            <input type="email" required style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} autoFocus autoComplete="username" />
           </Field>
           <Field label="Palavra-passe">
-            <input type="password" required style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)} />
+            <input type="password" required style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
           </Field>
           {erro && <div style={{ fontSize: 12.5, color: T.rust }}>{erro}</div>}
           <Btn type="submit" disabled={aEntrar}>{aEntrar ? "A entrar…" : "Entrar"}</Btn>
@@ -4295,11 +4305,8 @@ function Carpinova({ onSignOut, userEmail }) {
   const { despesas, addDespesa, updateDespesa, deleteDespesa } = useDespesasStore();
   const { clientes, addCliente, updateCliente, deleteCliente, syncCliente } = useClientesStore();
   const { equipa, addMembro, updateMembro, deleteMembro } = useEquipaStore();
-  const { emails, carregado: emailsCarregados, updateEmail, updateEmails } = useEmailsStore();
-  const [emailParaObra, setEmailParaObra] = useState(null);
-  const emailsNovos = emails.filter(emailNaoLido).length;
-  useAvisoSeparador(emailsNovos);
-  useAvisoEmailNovo(emails, emailsCarregados);
+  const { emails, updateEmail } = useEmailsStore(); // emails já importados continuam ligados às obras; a sincronização foi desligada
+  useAvisoSeparador(0);
   const nSeguimentos = useMemo(() => seguimentosPendentes(obras, emails).length, [obras, emails]);
   const clientesNomesUnicos = useMemo(() => {
     const set = new Set();
@@ -4310,7 +4317,26 @@ function Carpinova({ onSignOut, userEmail }) {
   const [tab, setTab] = useState("painel");
   const [selectedId, setSelectedId] = useState(null);
   const [novaObraOpen, setNovaObraOpen] = useState(false);
-  const [clienteFiltroInicial, setClienteFiltroInicial] = useState(null);
+  const [paletaOpen, setPaletaOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
+  const [tema, setTema] = useState(() => { try { return localStorage.getItem("carpinova-tema") || "auto"; } catch { return "auto"; } });
+  useEffect(() => {
+    const r = document.documentElement;
+    if (tema === "auto") r.removeAttribute("data-theme"); else r.setAttribute("data-theme", tema);
+    try { localStorage.setItem("carpinova-tema", tema); } catch { /* sem armazenamento */ }
+  }, [tema]);
+  const alternarTema = useCallback(() => {
+    setTema((t) => {
+      const escuro = t === "dark" || (t === "auto" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      return escuro ? "light" : "dark";
+    });
+  }, []);
+  useEffect(() => {
+    const h = (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPaletaOpen((v) => !v); } };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
+  const irPara = (k) => { setTab(k); setNavOpen(false); window.scrollTo({ top: 0 }); };
 
   const selected = obras.find((o) => o.id === selectedId);
 
@@ -4330,98 +4356,89 @@ function Carpinova({ onSignOut, userEmail }) {
 
   if (loading) {
     return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: T.paper, fontFamily: "Inter" }}>
-        <style>{FONT_IMPORT}</style>
-        A carregar dados da Carpinova…
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, alignItems: "center", justifyContent: "center", height: "100vh", background: T.paper, color: T.ink }}>
+        <div className="spinner" />
+        <div style={{ fontSize: 13, opacity: 0.6 }}>A carregar dados da Carpinova…</div>
       </div>
     );
   }
 
+  const tabAtual = TABS.find((t) => t.key === tab) || TABS[0];
+  const inicial = (userEmail || "?").trim().charAt(0).toUpperCase();
+
   return (
-    <div style={{ fontFamily: "'Inter', sans-serif", background: T.paper, minHeight: "100vh", color: T.ink }}>
-      <style>{FONT_IMPORT}</style>
-      <style>{`
-        * { box-sizing: border-box; }
-        input, select, textarea { min-width: 0; }
-        ::-webkit-scrollbar { height: 8px; width: 8px; }
-        ::-webkit-scrollbar-thumb { background: ${T.line}; border-radius: 4px; }
-        input:focus, select:focus, textarea:focus { border-color: ${T.walnut} !important; }
-      `}</style>
-
-      {/* Header */}
-      <div style={{ background: T.walnutDark, padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{
-            width: 34, height: 34, borderRadius: "50%", background: T.amber, display: "flex",
-            alignItems: "center", justifyContent: "center", border: "2px solid #fff",
-          }}>
-            <Wrench size={16} color="#fff" />
-          </div>
+    <div className="app-shell">
+      <aside className={"sidebar" + (navOpen ? " open" : "")}>
+        <div className="brand">
+          <div className="brand-logo"><Wrench size={18} color="var(--brand-fg)" /></div>
           <div>
-            <div style={{ fontFamily: "'Roboto Slab', serif", fontWeight: 700, fontSize: 18, color: "#fff", lineHeight: 1 }}>Carpinova</div>
-            <div style={{ fontSize: 11, color: T.paper3, letterSpacing: 0.5 }}>Controlo de Obras & Orçamentos</div>
+            <div className="brand-name">Carpinova</div>
+            <div className="brand-sub">Obras & orçamentos</div>
           </div>
         </div>
-        <div style={{ fontSize: 11, color: T.paper3, display: "flex", alignItems: "center", gap: 14 }}>
-          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {saveState === "saving" && <><Save size={12} /> a guardar…</>}
-            {saveState === "saved" && <><CheckCircle2 size={12} color="#8FBF7A" /> guardado</>}
-            {saveState === "error" && <><AlertTriangle size={12} color="#E08B7A" /> erro ao guardar</>}
-          </span>
-          <button onClick={exportarBackup} title="Descarregar cópia de segurança de todos os dados" style={{
-            display: "flex", alignItems: "center", gap: 5, background: "none", border: `1px solid ${T.paper3}`,
-            color: T.paper3, borderRadius: 4, padding: "4px 8px", cursor: "pointer", fontSize: 11,
-          }}>
-            <Download size={12} /> Backup
-          </button>
-          {userEmail && (
-            <span style={{ display: "flex", alignItems: "center", gap: 8, opacity: 0.8 }}>
-              {userEmail}
-              <button onClick={onSignOut} title="Sair" style={{ background: "none", border: "none", color: T.paper3, cursor: "pointer", textDecoration: "underline" }}>
-                Sair
-              </button>
-            </span>
-          )}
+        <nav className="nav-scroll">
+          {TAB_GRUPOS.map((g) => (
+            <div className="nav-group" key={g}>
+              <div className="nav-label">{g}</div>
+              {TABS.filter((t) => t.grupo === g).map((t) => {
+                const Icon = t.icon;
+                return (
+                  <button key={t.key} className={"nav-item" + (tab === t.key ? " active" : "")} onClick={() => irPara(t.key)}>
+                    <Icon size={17} /> {t.label}
+                    {t.key === "painel" && nSeguimentos > 0 && <span className="nav-badge">{nSeguimentos}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </nav>
+        <div className="sidebar-foot">
+          <button className="nav-item" onClick={exportarBackup} title="Descarregar cópia de segurança de todos os dados"><Download size={17} /> Cópia de segurança</button>
+          <div className="user-chip">
+            <span className="avatar">{inicial}</span>
+            <span className="user-mail">{userEmail}</span>
+            <button className="icon-btn" style={{ width: 30, height: 30 }} onClick={onSignOut} title="Sair" aria-label="Sair"><LogOut size={14} /></button>
+          </div>
         </div>
+      </aside>
+      {navOpen && <div className="sidebar-scrim" onClick={() => setNavOpen(false)} />}
+
+      <div className="main">
+        <header className="topbar">
+          <button className="icon-btn menu-btn" onClick={() => setNavOpen(true)} aria-label="Abrir menu"><Menu size={18} /></button>
+          <h1 className="topbar-title">{tabAtual.label}</h1>
+          <button className="search-trigger" onClick={() => setPaletaOpen(true)}>
+            <Search size={15} style={{ opacity: 0.6 }} />
+            <span>Pesquisar obras, clientes…</span>
+            <kbd>Ctrl K</kbd>
+          </button>
+          <div style={{ flex: 1 }} />
+          <span className="save-state hide-sm">
+            {saveState === "saving" && <><div className="spinner" style={{ width: 12, height: 12, borderWidth: 2 }} /> a guardar…</>}
+            {saveState === "saved" && <><CheckCircle2 size={14} color={T.green} /> guardado</>}
+            {saveState === "error" && <><AlertTriangle size={14} color={T.rust} /> erro ao guardar</>}
+          </span>
+          <button className="icon-btn" onClick={alternarTema} title="Alternar modo claro / escuro" aria-label="Alternar tema"><Sun size={16} /></button>
+          <Btn icon={Plus} onClick={() => setNovaObraOpen(true)}><span className="btn-label">Nova obra</span></Btn>
+        </header>
+
+        <main className={"content page-enter" + (tab === "pipeline" ? " wide" : "")} key={tab}>
+          {tab === "painel" && <Painel obras={obras} onOpen={setSelectedId} emails={emails} onAddHistorico={addHistorico} onChangeEstado={changeEstado} />}
+          {tab === "pipeline" && <Pipeline obras={obras} onOpen={setSelectedId} onChangeEstado={changeEstado} />}
+          {tab === "obras" && <ObrasTab obras={obras} onOpen={setSelectedId} onNew={() => setNovaObraOpen(true)} />}
+          {tab === "producao" && <Producao obras={obras} onOpenObra={setSelectedId} />}
+          {tab === "financeiro" && <Financeiro obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} equipa={equipa} onAddMembro={addMembro} onUpdateMembro={updateMembro} onDeleteMembro={deleteMembro} />}
+          {tab === "receitas" && <Receitas obras={obras} onOpenObra={setSelectedId} />}
+          {tab === "faturas" && <Faturas obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onOpenObra={setSelectedId} fornecedorNomes={fornecedores.map((f) => f.nome)} />}
+          {tab === "clientes" && <Clientes obras={obras} clientes={clientes} onAddCliente={addCliente} onUpdateCliente={updateCliente} onDeleteCliente={deleteCliente} onOpenObra={setSelectedId} />}
+          {tab === "fornecedores" && <Fornecedores fornecedores={fornecedores} onAdd={addFornecedor} onUpdate={updateFornecedor} onDelete={deleteFornecedor} despesas={despesas} />}
+        </main>
       </div>
 
-      {/* Tabs */}
-      <div style={{ display: "flex", gap: 2, padding: "0 24px", background: T.paper2, borderBottom: `2px dashed ${T.line}`, overflowX: "auto" }}>
-        {TABS.map((t) => {
-          const Icon = t.icon;
-          const active = tab === t.key;
-          return (
-            <button key={t.key} onClick={() => setTab(t.key)} style={{
-              display: "flex", alignItems: "center", gap: 6, padding: "12px 16px", background: "none", border: "none",
-              borderBottom: active ? `3px solid ${T.walnut}` : "3px solid transparent",
-              color: active ? T.walnutDark : T.ink, opacity: active ? 1 : 0.6,
-              fontWeight: active ? 700 : 500, fontSize: 13, cursor: "pointer", whiteSpace: "nowrap",
-            }}>
-              <Icon size={15} /> {t.label}
-              {t.key === "painel" && nSeguimentos > 0 && (
-                <span style={{ background: T.amber, color: "#fff", borderRadius: 10, fontSize: 10.5, fontWeight: 700, padding: "1px 6px" }}>{nSeguimentos}</span>
-              )}
-              {t.key === "emails" && emailsNovos > 0 && (
-                <span style={{ background: T.rust, color: "#fff", borderRadius: 10, fontSize: 10.5, fontWeight: 700, padding: "1px 6px" }}>{emailsNovos}</span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Content */}
-      <div style={{ padding: "24px", maxWidth: tab === "pipeline" ? "none" : 1200, margin: "0 auto" }}>
-        {tab === "painel" && <Painel obras={obras} onOpen={setSelectedId} emails={emails} onAddHistorico={addHistorico} onChangeEstado={changeEstado} />}
-        {tab === "pipeline" && <Pipeline obras={obras} onOpen={setSelectedId} onChangeEstado={changeEstado} />}
-        {tab === "obras" && <ObrasTab obras={obras} onOpen={setSelectedId} onNew={() => setNovaObraOpen(true)} />}
-        {tab === "emails" && <EmailsTab emails={emails} obras={obras} onUpdate={updateEmail} onUpdateMany={updateEmails} onCriarObra={(em) => { setEmailParaObra(em); setNovaObraOpen(true); }} />}
-        {tab === "producao" && <Producao obras={obras} onOpenObra={setSelectedId} />}
-        {tab === "financeiro" && <Financeiro obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} equipa={equipa} onAddMembro={addMembro} onUpdateMembro={updateMembro} onDeleteMembro={deleteMembro} />}
-        {tab === "receitas" && <Receitas obras={obras} onOpenObra={setSelectedId} />}
-        {tab === "faturas" && <Faturas obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onOpenObra={setSelectedId} fornecedorNomes={fornecedores.map((f) => f.nome)} />}
-        {tab === "clientes" && <Clientes obras={obras} clientes={clientes} onAddCliente={addCliente} onUpdateCliente={updateCliente} onDeleteCliente={deleteCliente} onOpenObra={setSelectedId} />}
-        {tab === "fornecedores" && <Fornecedores fornecedores={fornecedores} onAdd={addFornecedor} onUpdate={updateFornecedor} onDelete={deleteFornecedor} despesas={despesas} />}
-      </div>
+      {paletaOpen && (
+        <CommandPalette obras={obras} onClose={() => setPaletaOpen(false)} onOpenObra={setSelectedId} onGoTab={irPara}
+          onNovaObra={() => setNovaObraOpen(true)} onToggleTema={alternarTema} onBackup={exportarBackup} />
+      )}
 
       {selected && (
         <ObraModal key={selected.id} emails={emails} onUpdateEmail={updateEmail} obra={selected} onClose={() => setSelectedId(null)} onUpdate={updateObra} onChangeEstado={changeEstado} onAddHistorico={addHistorico} onDelete={deleteObra} fornecedorNomes={fornecedores.map((f) => f.nome)} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onSyncCliente={syncCliente} clientesNomes={clientesNomesUnicos} equipa={equipa} />
@@ -4429,19 +4446,8 @@ function Carpinova({ onSignOut, userEmail }) {
       {novaObraOpen && (
         <NovaObraModal
           suggestedRef={nextRef(obras)} refsExistentes={obras.map((o) => o.ref)} clientesNomes={clientesNomesUnicos}
-          prefill={emailParaObra ? {
-            cliente: emailParaObra.direcao === "saida" ? "" : (emailParaObra.de || ""),
-            clienteEmail: emailParaObra.direcao === "saida" ? ((emailParaObra.para || [])[0] || "") : (emailParaObra.deEmail || ""),
-            projeto: (emailParaObra.assunto || "").replace(/^((re|fw|fwd|enc|res)\s*:\s*)+/i, "").trim(),
-            descricao: (emailParaObra.texto || "").slice(0, 400),
-            canal: "email", dataEntrada: (emailParaObra.data || todayISO()).slice(0, 10),
-          } : {}}
-          onClose={() => { setNovaObraOpen(false); setEmailParaObra(null); }}
-          onCreate={(f) => {
-            const id = uid();
-            addObra({ ...f, id });
-            if (emailParaObra) { updateEmail(emailParaObra.id, { obraId: id, estado: "ligado", ligadoPor: "manual" }); setEmailParaObra(null); }
-          }} />
+          onClose={() => setNovaObraOpen(false)}
+          onCreate={(f) => addObra({ ...f, id: uid() })} />
       )}
     </div>
   );
@@ -4475,9 +4481,9 @@ export default function App() {
 
   if (session === undefined) {
     return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: T.paper, fontFamily: "Inter" }}>
-        <style>{FONT_IMPORT}</style>
-        A verificar sessão…
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, alignItems: "center", justifyContent: "center", height: "100vh", background: T.paper, color: T.ink }}>
+        <div className="spinner" />
+        <div style={{ fontSize: 13, opacity: 0.6 }}>A verificar sessão…</div>
       </div>
     );
   }
