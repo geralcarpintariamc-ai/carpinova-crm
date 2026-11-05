@@ -1085,6 +1085,327 @@ function Btn({ children, onClick, variant = "primary", icon: Icon, small, type =
 }
 
 /* ============================================================
+   DOCUMENTOS DA OBRA — pastas de ficheiros, margem do orçamento,
+   revisões e lista de corte. Tudo guardado na própria ficha da obra.
+   ============================================================ */
+const formatBytes = (n) => {
+  if (!n) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const PASTAS = [
+  { key: "executivo", label: "Executivo", icon: FileText },
+  { key: "3d", label: "3D", icon: ImageIcon },
+  { key: "orcamento", label: "Orçamento", icon: FileSpreadsheet },
+  { key: "fornecedores", label: "Fornecedores", icon: Package },
+  { key: "faturas", label: "Faturas", icon: Receipt },
+  { key: "fotos", label: "Fotos", icon: ImageIcon },
+  { key: "outros", label: "Outros", icon: Paperclip },
+];
+
+// Ficheiros antigos (sem pasta) são arrumados automaticamente pelo nome/tipo.
+function pastaDe(a) {
+  if (a.pasta && PASTAS.some((p) => p.key === a.pasta)) return a.pasta;
+  const n = (a.nome || "").toLowerCase();
+  const ext = n.split(".").pop();
+  if (/execut|prancha|desenho/.test(n) || ["dwg", "dxf"].includes(ext)) return "executivo";
+  if (/3d|imagen|render/.test(n)) return "3d";
+  if (/or[cç]amento|or[cç]_|proposta|ficha|mapa/.test(n)) return "orcamento";
+  if (/fatura|\bft\b|recibo/.test(n)) return "faturas";
+  if (["png", "jpg", "jpeg", "webp", "gif", "heic"].includes(ext)) return "fotos";
+  return "outros";
+}
+
+function FicheirosObra({ obra, commit }) {
+  const [aberta, setAberta] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [erro, setErro] = useState("");
+  const [arrastar, setArrastar] = useState(false);
+  const inputRef = useRef(null);
+  const anexosRef = useRef([]);
+  anexosRef.current = obra.anexos || [];
+
+  const porPasta = useMemo(() => {
+    const m = Object.fromEntries(PASTAS.map((p) => [p.key, []]));
+    (obra.anexos || []).forEach((a) => m[pastaDe(a)].push(a));
+    Object.values(m).forEach((l) => l.sort((x, y) => (y.dataUpload || "").localeCompare(x.dataUpload || "")));
+    return m;
+  }, [obra.anexos]);
+
+  const pastaAtiva = aberta || (PASTAS.find((p) => porPasta[p.key].length > 0)?.key) || "executivo";
+  const total = (obra.anexos || []).length;
+
+  const enviar = async (files) => {
+    files = Array.from(files || []);
+    if (files.length === 0) return;
+    setUploading(true); setErro("");
+    const novos = [];
+    for (const file of files) {
+      const path = `${obra.id}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      const { error } = await supabase.storage.from("anexos").upload(path, file);
+      if (error) { console.error("Erro a enviar ficheiro:", error); setErro(`Falhou "${file.name}": ${error.message}`); continue; }
+      novos.push({ id: uid(), nome: file.name, path, tipo: file.type || "", tamanho: file.size, dataUpload: todayISO(), pasta: pastaAtiva });
+    }
+    if (novos.length) commit({ anexos: [...anexosRef.current, ...novos] });
+    setUploading(false);
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  const mover = (a, pasta) => commit({ anexos: anexosRef.current.map((x) => (x.id === a.id ? { ...x, pasta } : x)) });
+  const remover = async (a) => {
+    commit({ anexos: anexosRef.current.filter((x) => x.id !== a.id) });
+    const { error } = await supabase.storage.from("anexos").remove([a.path]);
+    if (error) console.error("Erro a remover ficheiro do storage:", error);
+  };
+  const icone = (a) => {
+    const ext = (a.nome.split(".").pop() || "").toLowerCase();
+    if (["xlsx", "xls", "csv"].includes(ext)) return <FileSpreadsheet size={16} color={T.green} />;
+    if (ext === "pdf") return <FileType size={16} color={T.rust} />;
+    if (["png", "jpg", "jpeg", "webp", "gif", "heic"].includes(ext)) return <ImageIcon size={16} color={T.navy} />;
+    return <Paperclip size={16} color={T.walnut} />;
+  };
+
+  const lista = porPasta[pastaAtiva];
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+        {PASTAS.map((p) => (
+          <Chip key={p.key} ativo={pastaAtiva === p.key} onClick={() => setAberta(p.key)}>
+            {p.label}{porPasta[p.key].length > 0 && <span style={{ opacity: 0.6, marginLeft: 5 }}>{porPasta[p.key].length}</span>}
+          </Chip>
+        ))}
+      </div>
+
+      <div
+        onDragOver={(e) => { e.preventDefault(); setArrastar(true); }}
+        onDragLeave={() => setArrastar(false)}
+        onDrop={(e) => { e.preventDefault(); setArrastar(false); enviar(e.dataTransfer.files); }}
+        style={{
+          border: `1.5px dashed ${arrastar ? T.walnut : T.line}`, borderRadius: 14, padding: 12,
+          background: arrastar ? mix(T.walnut, 8) : "transparent", transition: "all .15s",
+        }}
+      >
+        {lista.length === 0 && (
+          <div style={{ fontSize: 12.5, opacity: 0.55, padding: "10px 4px" }}>
+            Pasta "{PASTAS.find((p) => p.key === pastaAtiva).label}" vazia. Larga ficheiros aqui ou usa o botão.
+          </div>
+        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {lista.map((a) => (
+            <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 10, fontSize: 13 }}>
+              {icone(a)}
+              <a href="#" onClick={(e) => { e.preventDefault(); abrirAnexo(a); }} style={{ flex: 1, minWidth: 0, color: T.ink, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.nome}</a>
+              <span className="hide-sm" style={{ fontSize: 11, opacity: 0.5, whiteSpace: "nowrap" }}>{formatBytes(a.tamanho)} · {fmtDate(a.dataUpload)}</span>
+              <select title="Mover para outra pasta" value={pastaDe(a)} onChange={(e) => mover(a, e.target.value)}
+                style={{ ...selectStyle, padding: "3px 6px", fontSize: 11.5, width: "auto" }}>
+                {PASTAS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+              </select>
+              <button onClick={() => remover(a)} title="Eliminar" style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={13} /></button>
+            </div>
+          ))}
+        </div>
+        <div style={{ marginTop: lista.length ? 10 : 4, display: "flex", alignItems: "center", gap: 10 }}>
+          <input ref={inputRef} type="file" multiple accept=".pdf,.xlsx,.xls,.csv,.doc,.docx,.dwg,.dxf,.zip,.skp,image/*" style={{ display: "none" }} onChange={(e) => enviar(e.target.files)} />
+          <Btn small variant="ghost" icon={Upload} disabled={uploading} onClick={() => inputRef.current && inputRef.current.click()}>
+            {uploading ? "A enviar…" : `Adicionar a ${PASTAS.find((p) => p.key === pastaAtiva).label}`}
+          </Btn>
+          <span style={{ fontSize: 11.5, opacity: 0.5 }}>{total} ficheiro(s) nesta obra</span>
+        </div>
+        {erro && <div style={{ fontSize: 11.5, color: T.rust, marginTop: 6 }}>{erro}</div>}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Margem do orçamento ---------- */
+function margemOrcamento(o) {
+  const custo = Number(o.custoEstimado) || 0;
+  const valor = valorTotalObra(o);
+  const meta = tipoClienteOf(o.tipoCliente)?.margem ?? 25;
+  if (!custo || !valor) return { custo, valor, meta, pct: null, nivel: null, precoMeta: custo ? custo / (1 - meta / 100) : null };
+  const pct = ((valor - custo) / valor) * 100;
+  const nivel = pct < meta * 0.6 ? "baixa" : pct < meta ? "atencao" : "ok";
+  return { custo, valor, meta, pct, nivel, precoMeta: custo / (1 - meta / 100) };
+}
+
+function MargemOrcamento({ obra, commit }) {
+  const [custo, setCusto] = useState(obra.custoEstimado ?? "");
+  useEffect(() => { setCusto(obra.custoEstimado ?? ""); }, [obra.custoEstimado]);
+  const m = margemOrcamento({ ...obra, custoEstimado: custo });
+  const cor = m.nivel === "baixa" ? T.rust : m.nivel === "atencao" ? T.amber : T.green;
+  return (
+    <div style={{ border: `1px solid ${m.nivel ? mix(cor, 45) : T.line}`, background: m.nivel ? mix(cor, 7) : T.paper2, borderRadius: 14, padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <Field label="Custo estimado (ficha interna, ex-IVA)">
+          <input type="number" style={{ ...inputStyle, width: 190 }} value={custo} onChange={(e) => setCusto(e.target.value)}
+            onBlur={() => commit({ custoEstimado: custo === "" ? null : Number(custo) })} placeholder="material + mão de obra…" />
+        </Field>
+        {m.pct !== null && (
+          <div>
+            <div style={{ fontSize: 11.5, opacity: 0.6, fontWeight: 600 }}>Margem prevista</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: cor, display: "flex", alignItems: "center", gap: 6 }}>
+              {m.nivel !== "ok" && <AlertTriangle size={18} />}{m.pct.toFixed(1)}%
+            </div>
+          </div>
+        )}
+        <div>
+          <div style={{ fontSize: 11.5, opacity: 0.6, fontWeight: 600 }}>Meta ({tipoClienteOf(obra.tipoCliente) ? "tipo de cliente" : "padrão"})</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: T.walnutDark }}>{m.meta}%</div>
+        </div>
+      </div>
+      {m.precoMeta && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 13 }}>
+          <span>Preço para atingir {m.meta}%: <b>{fmtEUR(m.precoMeta)}</b> (ex-IVA)</span>
+          {m.nivel && m.nivel !== "ok" && (
+            <Btn small icon={Check} onClick={() => commit({ valorOrcamento: Math.ceil(m.precoMeta) })}>Usar este preço</Btn>
+          )}
+        </div>
+      )}
+      {m.nivel === "baixa" && <div style={{ fontSize: 12.5, color: T.rust, fontWeight: 650 }}>Margem muito abaixo da meta — risco de perder dinheiro nesta obra. Revê o preço antes de enviar.</div>}
+      {m.nivel === "atencao" && <div style={{ fontSize: 12.5, color: T.amber, fontWeight: 650 }}>Margem abaixo da meta.</div>}
+      {!m.custo && <div style={{ fontSize: 11.5, opacity: 0.55 }}>Preenche o custo estimado para ver a margem prevista e o preço mínimo. A meta vem do tipo de cliente.</div>}
+    </div>
+  );
+}
+
+/* ---------- Revisões do orçamento ---------- */
+function RevisoesOrcamento({ obra, commit }) {
+  const revs = obra.revisoes || [];
+  const [valor, setValor] = useState("");
+  const [nota, setNota] = useState("");
+  const proxima = revs.length + 1;
+
+  const registar = () => {
+    const v = valor === "" ? Number(obra.valorOrcamento) : Number(valor);
+    if (!v || isNaN(v)) return;
+    const rev = { id: uid(), n: proxima, data: todayISO(), valor: v, nota: nota.trim() };
+    commit({ revisoes: [...revs, rev], valorOrcamento: v });
+    setValor(""); setNota("");
+  };
+  const apagar = (id) => commit({ revisoes: revs.filter((r) => r.id !== id) });
+
+  return (
+    <div>
+      {revs.length === 0 && <div style={{ fontSize: 12.5, opacity: 0.55, marginBottom: 8 }}>Sem revisões registadas. Cada vez que enviares um preço novo, regista-o aqui para ficar o histórico.</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+        {revs.slice().reverse().map((r, i, arr) => {
+          const ant = arr[i + 1];
+          const delta = ant && ant.valor ? ((r.valor - ant.valor) / ant.valor) * 100 : null;
+          return (
+            <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 10, fontSize: 13 }}>
+              <Tag color={i === 0 ? T.walnut : T.navy}>Rev.{r.n}</Tag>
+              <span style={{ fontWeight: 700 }}>{fmtEUR(r.valor)}</span>
+              {delta !== null && <span style={{ fontSize: 11.5, fontWeight: 700, color: delta < 0 ? T.rust : T.green }}>{delta > 0 ? "▲" : "▼"} {Math.abs(delta).toFixed(1)}%</span>}
+              <span style={{ flex: 1, minWidth: 0, opacity: 0.65, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.nota}</span>
+              <span style={{ fontSize: 11, opacity: 0.5 }}>{fmtDate(r.data)}</span>
+              <button onClick={() => apagar(r.id)} title="Apagar revisão" style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={13} /></button>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <Field label={`Preço da Rev.${proxima} (ex-IVA)`}>
+          <input type="number" style={{ ...inputStyle, width: 150 }} value={valor} onChange={(e) => setValor(e.target.value)} placeholder={obra.valorOrcamento ? String(obra.valorOrcamento) : ""} />
+        </Field>
+        <div style={{ flex: "1 1 180px" }}>
+          <Field label="O que mudou">
+            <input style={inputStyle} value={nota} onChange={(e) => setNota(e.target.value)} placeholder="ex: cliente pediu ilha maior" onKeyDown={(e) => e.key === "Enter" && registar()} />
+          </Field>
+        </div>
+        <Btn small icon={Plus} onClick={registar}>Registar Rev.{proxima}</Btn>
+      </div>
+      <div style={{ fontSize: 11.5, opacity: 0.5, marginTop: 6 }}>Ao registar, o valor orçamentado da obra passa a ser o da nova revisão.</div>
+    </div>
+  );
+}
+
+/* ---------- Lista de corte (CSV: comprimento, largura, quantidade, material, nome) ---------- */
+function ListaCorte({ obra, commit }) {
+  const [rows, setRows] = useState(obra.listaCorte || []);
+  const rowsRef = useRef(rows); rowsRef.current = rows;
+  const [colar, setColar] = useState(false);
+  const [texto, setTexto] = useState("");
+  const [sep, setSep] = useState(";");
+  const [cabecalho, setCabecalho] = useState(false);
+  const COLS = [["comprimento", "Comprimento"], ["largura", "Largura"], ["quantidade", "Qtd"], ["material", "Material"], ["nome", "Nome"]];
+
+  const guardar = (next) => { setRows(next); commit({ listaCorte: next }); };
+  const edit = (id, patch) => setRows((r) => r.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+  const importar = () => {
+    const novas = texto.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => {
+      const p = l.split(l.includes("\t") ? "\t" : l.includes(";") ? ";" : ",").map((c) => c.trim());
+      return { id: uid(), comprimento: p[0] || "", largura: p[1] || "", quantidade: p[2] || "1", material: p[3] || "", nome: p[4] || "" };
+    }).filter((r) => /\d/.test(r.comprimento) || /\d/.test(r.largura));
+    if (novas.length) guardar([...rowsRef.current, ...novas]);
+    setTexto(""); setColar(false);
+  };
+  const exportar = () => {
+    const q = (v) => { const s = String(v ?? ""); return s.includes(sep) || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s; };
+    const linhas = rows.map((r) => [r.comprimento, r.largura, r.quantidade, r.material, r.nome].map(q).join(sep));
+    if (cabecalho) linhas.unshift(["comprimento", "largura", "quantidade", "material", "nome"].join(sep));
+    const url = URL.createObjectURL(new Blob([linhas.join("\r\n")], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = `lista-corte-${(obra.ref || obra.projeto || "obra").replace(/[^a-zA-Z0-9_-]+/g, "_")}.csv`; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const totalPecas = rows.reduce((s, r) => s + (Number(String(r.quantidade).replace(",", ".")) || 0), 0);
+
+  return (
+    <div>
+      {rows.length > 0 && (
+        <div style={{ overflowX: "auto", marginBottom: 10 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 520 }}>
+            <thead><tr style={{ textAlign: "left", fontSize: 11, opacity: 0.55 }}>
+              {COLS.map(([k, l]) => <th key={k} style={{ padding: "3px 4px", fontWeight: 600 }}>{l}</th>)}<th />
+            </tr></thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id}>
+                  {COLS.map(([k]) => (
+                    <td key={k} style={{ padding: 2 }}>
+                      <input style={{ ...inputStyle, padding: "5px 7px", fontSize: 12.5, width: "100%", minWidth: k === "material" || k === "nome" ? 120 : 64 }}
+                        value={r[k] ?? ""} onChange={(e) => edit(r.id, { [k]: e.target.value })} onBlur={() => commit({ listaCorte: rowsRef.current })} />
+                    </td>
+                  ))}
+                  <td style={{ padding: 2 }}><button onClick={() => guardar(rows.filter((x) => x.id !== r.id))} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={13} /></button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {rows.length === 0 && !colar && <div style={{ fontSize: 12.5, opacity: 0.55, marginBottom: 8 }}>Sem peças. Adiciona à mão ou cola linhas do Excel.</div>}
+      {colar && (
+        <div style={{ marginBottom: 10 }}>
+          <textarea style={textareaStyle} rows={5} value={texto} onChange={(e) => setTexto(e.target.value)}
+            placeholder={"Cola aqui linhas do Excel, por esta ordem:\ncomprimento  largura  quantidade  material  nome"} />
+          <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+            <Btn small onClick={importar}>Importar linhas</Btn>
+            <Btn small variant="ghost" onClick={() => { setColar(false); setTexto(""); }}>Cancelar</Btn>
+          </div>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <Btn small variant="ghost" icon={Plus} onClick={() => guardar([...rows, { id: uid(), comprimento: "", largura: "", quantidade: "1", material: rows[rows.length - 1]?.material || "", nome: "" }])}>Peça</Btn>
+        <Btn small variant="ghost" icon={Upload} onClick={() => setColar((v) => !v)}>Colar do Excel</Btn>
+        {rows.length > 0 && <>
+          <Btn small icon={Download} onClick={exportar}>Exportar CSV ({rows.length} linhas · {totalPecas} peças)</Btn>
+          <select style={{ ...selectStyle, width: "auto", padding: "5px 8px", fontSize: 12 }} value={sep} onChange={(e) => setSep(e.target.value)} title="Separador de colunas">
+            <option value=";">separador ;</option><option value=",">separador ,</option><option value={"\t"}>separador TAB</option>
+          </select>
+          <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
+            <input type="checkbox" checked={cabecalho} onChange={(e) => setCabecalho(e.target.checked)} /> com cabeçalho
+          </label>
+        </>}
+      </div>
+      <div style={{ fontSize: 11.5, opacity: 0.5, marginTop: 6 }}>Colunas do CSV: comprimento, largura, quantidade, material, nome (sem coluna de numeração).</div>
+    </div>
+  );
+}
+
+/* ============================================================
    MODAL — DETALHE DA OBRA
    ============================================================ */
 /* Bloco "Seguimento do orçamento" na ficha da obra: ver e alterar follow-ups, lembrete previsto e arquivo. */
@@ -1219,55 +1540,7 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
   }, [local.cotacoes]);
 
-  const [uploading, setUploading] = useState(false);
-  const [uploadErro, setUploadErro] = useState("");
-  const fileInputRef = useRef(null);
 
-  const handleFileUpload = async (e) => {
-    const files = Array.from(e.target.files || []);
-    if (files.length === 0) return;
-    setUploading(true);
-    setUploadErro("");
-    const novosAnexos = [];
-    for (const file of files) {
-      const path = `${obra.id}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-      const { error } = await supabase.storage.from("anexos").upload(path, file);
-      if (error) {
-        console.error("Erro a enviar ficheiro:", error);
-        setUploadErro(`Falhou "${file.name}": ${error.message}`);
-        continue;
-      }
-      novosAnexos.push({
-        id: uid(), nome: file.name, path,
-        tipo: file.type || "", tamanho: file.size, dataUpload: todayISO(),
-      });
-    }
-    if (novosAnexos.length) commit({ anexos: [...(local.anexos || []), ...novosAnexos] });
-    setUploading(false);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const removeAnexo = async (anexo) => {
-    const anexos = (local.anexos || []).filter((a) => a.id !== anexo.id);
-    commit({ anexos });
-    const { error } = await supabase.storage.from("anexos").remove([anexo.path]);
-    if (error) console.error("Erro a remover ficheiro do storage:", error);
-  };
-
-  const iconeAnexo = (a) => {
-    const ext = (a.nome.split(".").pop() || "").toLowerCase();
-    if (["xlsx", "xls", "csv"].includes(ext)) return <FileSpreadsheet size={16} color={T.green} />;
-    if (ext === "pdf") return <FileType size={16} color={T.rust} />;
-    if (["png", "jpg", "jpeg", "webp", "gif"].includes(ext)) return <ImageIcon size={16} color={T.navy} />;
-    return <Paperclip size={16} color={T.walnut} />;
-  };
-
-  const formatBytes = (n) => {
-    if (!n) return "";
-    if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-  };
 
   const [novoCusto, setNovoCusto] = useState({ descricao: "", categoria: CATEGORIAS_DESPESA[0], valor: "", ivaPct: 23, fornecedor: "", numeroFatura: "", dataVencimento: "" });
   const custosObra = useMemo(() => (despesas || []).filter((d) => d.obraId === obra.id), [despesas, obra.id]);
@@ -1530,6 +1803,11 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
               </Field>
             </div>
           </div>
+
+          <div style={{ marginTop: 14 }}><MargemOrcamento obra={local} commit={commit} /></div>
+
+          <CutDivider label="Revisões do orçamento" />
+          <RevisoesOrcamento obra={local} commit={commit} />
 
           <CutDivider label="Custos da Obra & Margem Real" />
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1844,33 +2122,11 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
             )}
           </div>
 
-          <CutDivider label="Anexos (faturas, PDFs, Excel, fotos…)" />
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {(local.anexos || []).length === 0 && (
-              <div style={{ fontSize: 12, opacity: 0.55 }}>Sem ficheiros anexados a esta obra.</div>
-            )}
-            {(local.anexos || []).map((a) => (
-              <div key={a.id} style={{
-                display: "flex", alignItems: "center", gap: 8, padding: "7px 10px",
-                background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 13,
-              }}>
-                {iconeAnexo(a)}
-                <a href="#" onClick={(e) => { e.preventDefault(); abrirAnexo(a); }} style={{ flex: 1, color: T.ink, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {a.nome}
-                </a>
-                <span style={{ fontSize: 11, opacity: 0.5, whiteSpace: "nowrap" }}>{formatBytes(a.tamanho)}</span>
-                <span style={{ fontSize: 11, opacity: 0.5, whiteSpace: "nowrap" }}>{fmtDate(a.dataUpload)}</span>
-                <button onClick={() => removeAnexo(a)} style={{ background: "none", border: "none", cursor: "pointer", color: T.rust }}><Trash2 size={13} /></button>
-              </div>
-            ))}
-            <div>
-              <input ref={fileInputRef} type="file" multiple accept=".pdf,.xlsx,.xls,.csv,.doc,.docx,image/*" style={{ display: "none" }} onChange={handleFileUpload} />
-              <Btn small variant="ghost" icon={Upload} disabled={uploading} onClick={() => fileInputRef.current && fileInputRef.current.click()}>
-                {uploading ? "A enviar…" : "Anexar ficheiro"}
-              </Btn>
-              {uploadErro && <div style={{ fontSize: 11.5, color: T.rust, marginTop: 6 }}>{uploadErro}</div>}
-            </div>
-          </div>
+          <CutDivider label="Ficheiros da obra" />
+          <FicheirosObra obra={local} commit={commit} />
+
+          <CutDivider label="Lista de corte" />
+          <ListaCorte key={obra.id} obra={local} commit={commit} />
 
           <CutDivider label="Próxima ação" />
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
@@ -2229,7 +2485,11 @@ function Pipeline({ obras, onOpen, onChangeEstado }) {
                     >
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
                         <span style={{ fontSize: 11, fontWeight: 600, color: T.ink, opacity: 0.5 }}>{o.ref || "sem ref."}</span>
-                        {late && <AlertTriangle size={14} color={T.rust} />}
+                        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          {(() => { const mo = margemOrcamento(o); return mo.nivel && mo.nivel !== "ok" && ACTIVE_KEYS.includes(o.estado)
+                            ? <span title={`Margem prevista ${mo.pct.toFixed(0)}% (meta ${mo.meta}%)`} style={{ fontSize: 10.5, fontWeight: 700, color: mo.nivel === "baixa" ? T.rust : T.amber }}>margem {mo.pct.toFixed(0)}%</span> : null; })()}
+                          {late && <AlertTriangle size={14} color={T.rust} />}
+                        </span>
                       </div>
                       <div style={{ fontWeight: 650, fontSize: 13.5, color: T.ink, marginTop: 3, lineHeight: 1.3, wordBreak: "break-word" }}>{o.projeto}</div>
                       <div style={{ fontSize: 12.5, opacity: 0.6, marginTop: 2, wordBreak: "break-word" }}>{o.cliente}</div>
