@@ -2912,8 +2912,9 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
   }, [obras, despesas, despesasObraValidas, mesesSelecionados, mesesSelecionadosSet]);
 
   const lucroPorObra = useMemo(() => {
+    // Só obras aceites ou mais avançadas — orçamentos entregues ainda não são certos
     return obras
-      .filter((o) => valorTotalObra(o) !== null)
+      .filter((o) => COM_PAGAMENTOS_KEYS.includes(o.estado) && valorTotalObra(o) !== null)
       .map((o) => {
         const custos = custosPorObra[o.id] || 0;
         const valor = valorTotalObra(o);
@@ -3105,7 +3106,7 @@ function Financeiro({ obras, despesas, onAddDespesa, onUpdateDespesa, onDeleteDe
               </tr>
             ))}
             {lucroPorObra.length === 0 && (
-              <tr><td colSpan={6} style={{ padding: 20, textAlign: "center", opacity: 0.5 }}>Sem obras com valor adjudicado ainda.</td></tr>
+              <tr><td colSpan={6} style={{ padding: 20, textAlign: "center", opacity: 0.5 }}>Sem obras aceites ou adjudicadas com valor ainda.</td></tr>
             )}
           </tbody>
         </table>
