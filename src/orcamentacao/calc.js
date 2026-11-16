@@ -34,20 +34,43 @@ export function custoLinha(l) {
   return r2(num(l.qtd) * num(l.custoUnit) * (1 + num(l.desperdicio)));
 }
 
-export function totaisOrcamento(linhas = [], { margem = MARGEM_PADRAO, iva = 0.23, autoliquidacao = false, isento = false } = {}) {
-  const custo = r2(linhas.reduce((s, l) => s + custoLinha(l), 0));
-  const pvpExIva = precoVenda(custo, margem);
+export const ARREDONDAR_A = 5; // o preço de cada artigo sobe para o múltiplo de 5 € seguinte (sempre a favor da margem)
+
+const arredondaCima = (v, passo = ARREDONDAR_A) => (passo > 0 ? Math.ceil(r2(v) / passo - 1e-9) * passo : r2(v));
+
+export function custoArtigo(a) {
+  return r2((a.linhas || []).reduce((s, l) => s + custoLinha(l), 0));
+}
+
+// Preço de venda do artigo (ex-IVA): preço fixo, se existir; senão custo/(1-margem) arredondado para cima.
+export function precoArtigo(a, margem = MARGEM_PADRAO) {
+  if (a.precoFixo !== null && a.precoFixo !== undefined && a.precoFixo !== "" && num(a.precoFixo) > 0) return r2(num(a.precoFixo));
+  const c = custoArtigo(a);
+  return c > 0 ? arredondaCima(precoVenda(c, margem)) : 0;
+}
+
+// Orçamentos criados só com "linhas" passam a ter um único artigo.
+export function normalizaOrcamento(orc) {
+  const base = orc || {};
+  let artigos = base.artigos;
+  if (!artigos) artigos = base.linhas && base.linhas.length ? [{ id: "a_1", num: "1", descricao: "", linhas: base.linhas, precoFixo: null }] : [];
+  return { margem: base.margem != null ? base.margem : MARGEM_PADRAO, artigos, proposta: base.proposta || {} };
+}
+
+export function totaisOrcamento(artigos = [], { margem = MARGEM_PADRAO, iva = 0.23, autoliquidacao = false, isento = false } = {}) {
+  const custo = r2(artigos.reduce((s, a) => s + custoArtigo(a), 0));
+  const pvpExIva = r2(artigos.reduce((s, a) => s + precoArtigo(a, margem), 0));
   const taxa = autoliquidacao || isento ? 0 : iva;
   const ivaValor = r2(pvpExIva * taxa);
-  return { custo, pvpExIva, lucro: r2(pvpExIva - custo), margemReal: pvpExIva ? r2(((pvpExIva - custo) / pvpExIva) * 100) : 0, ivaValor, totalComIva: r2(pvpExIva + ivaValor) };
+  return { custo, pvpExIva, lucro: r2(pvpExIva - custo), margemReal: pvpExIva ? r2(((pvpExIva - custo) / pvpExIva) * 100) : 0, taxaIva: taxa, ivaValor, totalComIva: r2(pvpExIva + ivaValor) };
 }
 
 // Linhas sem preço confirmado: o orçamento deve avisar antes de ser enviado.
-export function linhasComPrecoDuvidoso(linhas = [], catalogo = []) {
+export function linhasComPrecoDuvidoso(artigos = [], catalogo = []) {
   const porId = new Map(catalogo.map((c) => [c.id, c]));
-  return linhas.filter((l) => {
+  return artigos.flatMap((a) => (a.linhas || []).filter((l) => {
     if (!l.catalogoId) return num(l.custoUnit) <= 0;
     const it = porId.get(l.catalogoId);
     return !it || estadoPreco(it) !== "ok";
-  });
+  }));
 }

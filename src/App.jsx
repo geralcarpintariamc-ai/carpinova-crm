@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { supabase } from "./supabaseClient";
 import { CATALOGO_SEED } from "./orcamentacao/catalogoSeed";
-import { CATEGORIAS_CATALOGO, UNIDADES as UNIDADES_ORC, estadoPreco, diasDesde, DIAS_PRECO_ANTIGO, MARGEM_PADRAO, custoLinha, totaisOrcamento, linhasComPrecoDuvidoso } from "./orcamentacao/calc";
+import { CATEGORIAS_CATALOGO, UNIDADES as UNIDADES_ORC, estadoPreco, diasDesde, DIAS_PRECO_ANTIGO, MARGEM_PADRAO, custoLinha, custoArtigo, precoArtigo, normalizaOrcamento, totaisOrcamento, linhasComPrecoDuvidoso } from "./orcamentacao/calc";
+import { PROPOSTA_DEFAULTS } from "./orcamentacao/pdfDefaults";
 import {
   Plus, Search, X, Mail, Phone, Calendar, AlertTriangle, TrendingUp,
   Package, CheckCircle2, XCircle, Clock, Download, Building2, ChevronDown,
@@ -80,15 +81,6 @@ const ESQUEMAS_PAGAMENTO = [
   { key: "50-50", label: "50/50", partes: [["Adjudicação", 50], ["Conclusão", 50]] },
 ];
 
-/* Tabela de margens (Secção 4 do perfil) — liga o tipo de cliente à margem sugerida */
-const CLIENTE_TIPOS = [
-  { key: "residencial", label: "Residencial direto", margem: 30 },
-  { key: "arquiteto", label: "Indicação de arquiteto", margem: 28 },
-  { key: "empreiteiro", label: "Empreiteiro / obra grande", margem: 25 },
-  { key: "premium", label: "Projeto especial / direto premium", margem: 35 },
-  { key: "industrial", label: "Industrial / série", margem: 15 },
-];
-const tipoClienteOf = (key) => CLIENTE_TIPOS.find((c) => c.key === key);
 
 /* Categorias de despesa — usadas tanto nos custos de obra como nas despesas gerais */
 const CATEGORIAS_DESPESA = [
@@ -1307,7 +1299,7 @@ function FicheirosObra({ obra, commit }) {
 function margemOrcamento(o) {
   const custo = Number(o.custoEstimado) || 0;
   const valor = valorTotalObra(o);
-  const meta = o.orcamento && o.orcamento.margem != null ? Math.round(o.orcamento.margem * 100) : (tipoClienteOf(o.tipoCliente)?.margem ?? Math.round(MARGEM_PADRAO * 100));
+  const meta = o.orcamento && o.orcamento.margem != null ? Math.round(o.orcamento.margem * 100) : Math.round(MARGEM_PADRAO * 100);
   if (!custo || !valor) return { custo, valor, meta, pct: null, nivel: null, precoMeta: custo ? custo / (1 - meta / 100) : null };
   const pct = ((valor - custo) / valor) * 100;
   const nivel = pct < meta * 0.6 ? "baixa" : pct < meta ? "atencao" : "ok";
@@ -1335,7 +1327,7 @@ function MargemOrcamento({ obra, commit }) {
           </div>
         )}
         <div>
-          <div style={{ fontSize: 11.5, opacity: 0.6, fontWeight: 600 }}>Meta ({tipoClienteOf(obra.tipoCliente) ? "tipo de cliente" : "padrão"})</div>
+          <div style={{ fontSize: 11.5, opacity: 0.6, fontWeight: 600 }}>Meta ({obra.orcamento && obra.orcamento.margem != null ? "deste orçamento" : "padrão"})</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: T.walnutDark }}>{m.meta}%</div>
         </div>
       </div>
@@ -1354,83 +1346,132 @@ function MargemOrcamento({ obra, commit }) {
   );
 }
 
-/* ---------- Orçamento por linhas (custo → preço com margem) ---------- */
-function OrcamentoObra({ obra, commit, catalogo = [] }) {
-  const orc = obra.orcamento || { linhas: [], margem: MARGEM_PADRAO };
-  const linhas = orc.linhas || [];
-  const margem = orc.margem != null ? orc.margem : MARGEM_PADRAO;
+/* ---------- Orçamento por artigos (custo → preço com margem → PDFs) ---------- */
+async function logoDataUrl() {
+  try {
+    const r = await fetch(`${import.meta.env.BASE_URL}logo.png`);
+    const blob = await r.blob();
+    return await new Promise((res) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(blob); });
+  } catch (e) { return null; }
+}
+
+export function OrcamentoObra({ obra, commit, catalogo = [] }) {
+  const orc = normalizaOrcamento(obra.orcamento);
+  const { margem, artigos } = orc;
+  const prop = { ...PROPOSTA_DEFAULTS, ...orc.proposta };
   const iva = ivaTipoOf(obra);
-  const [escolha, setEscolha] = useState("");
+  const [aGerar, setAGerar] = useState("");
+  const opcoesIva = { iva: 0.23, autoliquidacao: iva.key === "autoliquidacao", isento: iva.key === "isento" };
+  const num = (v) => { const n = parseFloat(String(v).replace(",", ".")); return Number.isFinite(n) ? n : 0; };
+
   const save = (patch) => {
-    const novo = { ...orc, margem, linhas, ...patch };
-    const t = totaisOrcamento(novo.linhas, { margem: novo.margem, iva: 0.23, autoliquidacao: iva.key === "autoliquidacao", isento: iva.key === "isento" });
+    const novo = { ...orc, ...patch };
+    const t = totaisOrcamento(novo.artigos, { margem: novo.margem, ...opcoesIva });
     commit({ orcamento: novo, custoEstimado: t.custo });
   };
-  const setLinha = (id, patch) => save({ linhas: linhas.map((l) => (l.id === id ? { ...l, ...patch } : l)) });
-  const removeLinha = (id) => save({ linhas: linhas.filter((l) => l.id !== id) });
-  const addLivre = () => save({ linhas: [...linhas, { id: uid(), descricao: "", unidade: "un", qtd: 1, custoUnit: 0, desperdicio: 0 }] });
-  const addCatalogo = (id) => {
-    const c = catalogo.find((x) => x.id === id);
-    if (!c) return;
-    save({ linhas: [...linhas, { id: uid(), catalogoId: c.id, descricao: c.nome, unidade: c.unidade, qtd: 1, custoUnit: c.preco, desperdicio: c.categoria === "Painel" ? 0.1 : 0 }] });
-    setEscolha("");
+  const setArtigo = (id, patch) => save({ artigos: artigos.map((a) => (a.id === id ? { ...a, ...patch } : a)) });
+  const addArtigo = () => {
+    const nums = artigos.map((a) => parseInt(a.num, 10)).filter(Number.isFinite);
+    save({ artigos: [...artigos, { id: uid(), num: String((nums.length ? Math.max(...nums) : 0) + 1), descricao: "", linhas: [], precoFixo: null }] });
   };
-  // Se o preço do catálogo mudou desde que a linha foi criada, o utilizador escolhe quando atualizar.
+  const removeArtigo = (id) => { if (window.confirm("Remover este artigo e as suas linhas?")) save({ artigos: artigos.filter((a) => a.id !== id) }); };
+  const setLinha = (aid, lid, patch) => setArtigo(aid, { linhas: artigos.find((a) => a.id === aid).linhas.map((l) => (l.id === lid ? { ...l, ...patch } : l)) });
+  const removeLinha = (aid, lid) => setArtigo(aid, { linhas: artigos.find((a) => a.id === aid).linhas.filter((l) => l.id !== lid) });
+  const addLinha = (aid, linha) => setArtigo(aid, { linhas: [...artigos.find((a) => a.id === aid).linhas, { id: uid(), ...linha }] });
+  const addCatalogo = (aid, cid) => {
+    const c = catalogo.find((x) => x.id === cid);
+    if (c) addLinha(aid, { catalogoId: c.id, descricao: c.nome, unidade: c.unidade, qtd: 1, custoUnit: c.preco, desperdicio: c.categoria === "Painel" ? 0.1 : 0 });
+  };
+  const setProp = (patch) => save({ proposta: { ...orc.proposta, ...patch } });
+
   const catPorId = new Map(catalogo.map((c) => [c.id, c]));
-  const t = totaisOrcamento(linhas, { margem, iva: 0.23, autoliquidacao: iva.key === "autoliquidacao", isento: iva.key === "isento" });
-  const duvidosas = linhasComPrecoDuvidoso(linhas, catalogo);
-  const num = (v) => { const n = parseFloat(String(v).replace(",", ".")); return Number.isFinite(n) ? n : 0; };
+  const t = totaisOrcamento(artigos, { margem, ...opcoesIva });
+  const duvidosas = linhasComPrecoDuvidoso(artigos, catalogo);
+  const rotulo = (txt) => <div style={{ fontSize: 11.5, opacity: 0.6, fontWeight: 600 }}>{txt}</div>;
+
+  const gerar = async (tipo) => {
+    setAGerar(tipo);
+    try {
+      const [{ gerarPropostaPDF, gerarFichaCustoPDF }, logo] = await Promise.all([import("./orcamentacao/pdf"), logoDataUrl()]);
+      const args = { obra, orcamento: obra.orcamento, logo, catalogo };
+      if (tipo === "proposta") gerarPropostaPDF(args); else gerarFichaCustoPDF(args);
+    } catch (e) { console.error("Erro a gerar PDF:", e); window.alert("Não foi possível gerar o PDF."); }
+    setAGerar("");
+  };
 
   return (
     <div style={{ border: `1px solid ${T.line}`, background: T.paper2, borderRadius: 14, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
-      {linhas.length === 0 && <div style={{ fontSize: 12.5, opacity: 0.6 }}>Sem linhas. Junta artigos do catálogo ou cria uma linha livre; o preço de venda calcula-se sozinho a partir do custo e da margem.</div>}
-      {linhas.map((l) => {
-        const cat = l.catalogoId ? catPorId.get(l.catalogoId) : null;
-        const mudou = cat && cat.preco !== l.custoUnit;
-        const duvidosa = duvidosas.some((d) => d.id === l.id);
+      {artigos.length === 0 && <div style={{ fontSize: 12.5, opacity: 0.6 }}>Sem artigos. Cada artigo é uma linha da proposta ao cliente (ex.: "Roupeiro lacado 3,07 × 0,70 × 2,50 m"); dentro dele juntas os materiais, ferragens e horas, e o preço de venda calcula-se sozinho.</div>}
+
+      {artigos.map((a) => {
+        const custo = custoArtigo(a); const pv = precoArtigo(a, margem);
         return (
-          <div key={l.id} style={{ border: `1px solid ${duvidosa ? mix(T.amber, 50) : T.line}`, borderRadius: 12, padding: 10, display: "flex", flexDirection: "column", gap: 8, background: T.paper }}>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input style={{ ...inputStyle, flex: 1 }} placeholder="Descrição" value={l.descricao} onChange={(e) => setLinha(l.id, { descricao: e.target.value })} />
-              <button className="icon-btn" title="Remover linha" onClick={() => removeLinha(l.id)}><Trash2 size={15} /></button>
+          <div key={a.id} style={{ border: `1px solid ${T.line}`, borderRadius: 12, padding: 10, display: "flex", flexDirection: "column", gap: 8, background: T.paper }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+              <input style={{ ...inputStyle, width: 58, textAlign: "center", fontWeight: 700 }} value={a.num} title="Nº do artigo" onChange={(e) => setArtigo(a.id, { num: e.target.value })} />
+              <textarea style={{ ...textareaStyle, flex: 1, minHeight: 38 }} rows={2} placeholder="Descrição para o cliente (medidas, acabamento…)" value={a.descricao} onChange={(e) => setArtigo(a.id, { descricao: e.target.value })} />
+              <button className="icon-btn" title="Remover artigo" onClick={() => removeArtigo(a.id)}><Trash2 size={15} /></button>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(92px, 1fr))", gap: 8, alignItems: "end" }}>
-              <Field label="Qtd."><input style={inputStyle} inputMode="decimal" defaultValue={l.qtd} key={l.id + "q"} onBlur={(e) => setLinha(l.id, { qtd: num(e.target.value) })} /></Field>
-              <Field label="Unid."><select style={selectStyle} value={l.unidade} onChange={(e) => setLinha(l.id, { unidade: e.target.value })}>{UNIDADES_ORC.map((u) => <option key={u}>{u}</option>)}</select></Field>
-              <Field label="Custo unit. €"><input style={inputStyle} inputMode="decimal" defaultValue={l.custoUnit} key={l.id + "c" + l.custoUnit} onBlur={(e) => setLinha(l.id, { custoUnit: num(e.target.value) })} /></Field>
-              <Field label="Desperdício %"><input style={inputStyle} inputMode="decimal" defaultValue={Math.round((l.desperdicio || 0) * 100)} key={l.id + "d"} onBlur={(e) => setLinha(l.id, { desperdicio: num(e.target.value) / 100 })} /></Field>
-              <div style={{ textAlign: "right", fontWeight: 750, paddingBottom: 9 }}>{fmtEUR(custoLinha(l))}</div>
+
+            {a.linhas.map((l) => {
+              const cat = l.catalogoId ? catPorId.get(l.catalogoId) : null;
+              const mudou = cat && cat.preco !== l.custoUnit;
+              const semCusto = !cat && !(l.custoUnit > 0);
+              return (
+                <div key={l.id} style={{ borderTop: `1px dashed ${T.line}`, paddingTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input style={{ ...inputStyle, flex: 1 }} placeholder="Material, ferragem, mão de obra…" value={l.descricao} onChange={(e) => setLinha(a.id, l.id, { descricao: e.target.value })} />
+                    <button className="icon-btn" title="Remover linha" onClick={() => removeLinha(a.id, l.id)}><X size={15} /></button>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(86px, 1fr))", gap: 8, alignItems: "end" }}>
+                    <Field label="Qtd."><input style={inputStyle} inputMode="decimal" defaultValue={l.qtd} key={l.id + "q"} onBlur={(e) => setLinha(a.id, l.id, { qtd: num(e.target.value) })} /></Field>
+                    <Field label="Unid."><select style={selectStyle} value={l.unidade} onChange={(e) => setLinha(a.id, l.id, { unidade: e.target.value })}>{UNIDADES_ORC.map((u) => <option key={u}>{u}</option>)}</select></Field>
+                    <Field label="Custo unit. €"><input style={inputStyle} inputMode="decimal" defaultValue={l.custoUnit} key={l.id + "c" + l.custoUnit} onBlur={(e) => setLinha(a.id, l.id, { custoUnit: num(e.target.value) })} /></Field>
+                    <Field label="Desp. %"><input style={inputStyle} inputMode="decimal" defaultValue={Math.round((l.desperdicio || 0) * 100)} key={l.id + "d"} onBlur={(e) => setLinha(a.id, l.id, { desperdicio: num(e.target.value) / 100 })} /></Field>
+                    <div style={{ textAlign: "right", fontWeight: 750, paddingBottom: 9 }}>{fmtEUR(custoLinha(l))}</div>
+                  </div>
+                  {(mudou || semCusto || (cat && estadoPreco(cat) !== "ok")) && (
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
+                      {semCusto && <span style={{ color: T.rust, fontWeight: 650 }}>Sem custo definido</span>}
+                      {cat && estadoPreco(cat) === "porConfirmar" && <span style={{ color: T.rust, fontWeight: 650 }}>Preço do catálogo por confirmar</span>}
+                      {cat && estadoPreco(cat) === "antigo" && <span style={{ color: T.amber, fontWeight: 650 }}>Preço do catálogo com {diasDesde(cat.precoData)} dias</span>}
+                      {mudou && <Btn small variant="ghost" icon={RotateCcw} onClick={() => setLinha(a.id, l.id, { custoUnit: cat.preco })}>Catálogo está a {fmtEUR(cat.preco)} — atualizar</Btn>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <select style={{ ...selectStyle, flex: "1 1 200px" }} value="" onChange={(e) => e.target.value && addCatalogo(a.id, e.target.value)}>
+                <option value="">+ Juntar do catálogo…</option>
+                {CATEGORIAS_CATALOGO.map((cg) => (
+                  <optgroup key={cg} label={cg}>
+                    {catalogo.filter((c) => c.categoria === cg).map((c) => <option key={c.id} value={c.id}>{c.nome} · {fmtEUR(c.preco)}/{c.unidade}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+              <Btn small icon={Plus} variant="ghost" onClick={() => addLinha(a.id, { descricao: "", unidade: "un", qtd: 1, custoUnit: 0, desperdicio: 0 })}>Linha livre</Btn>
             </div>
-            {(mudou || (cat && estadoPreco(cat) !== "ok") || (!cat && l.custoUnit <= 0)) && (
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
-                {!cat && l.custoUnit <= 0 && <span style={{ color: T.rust, fontWeight: 650 }}>Sem custo definido</span>}
-                {cat && estadoPreco(cat) === "porConfirmar" && <span style={{ color: T.rust, fontWeight: 650 }}>Preço do catálogo por confirmar</span>}
-                {cat && estadoPreco(cat) === "antigo" && <span style={{ color: T.amber, fontWeight: 650 }}>Preço do catálogo com {diasDesde(cat.precoData)} dias</span>}
-                {mudou && <Btn small variant="ghost" icon={RotateCcw} onClick={() => setLinha(l.id, { custoUnit: cat.preco })}>Catálogo está a {fmtEUR(cat.preco)} — atualizar</Btn>}
-              </div>
-            )}
+
+            <div style={{ display: "flex", gap: 14, alignItems: "flex-end", flexWrap: "wrap", borderTop: `1px solid ${T.line}`, paddingTop: 8 }}>
+              <div>{rotulo("Custo")}<div style={{ fontWeight: 750 }}>{fmtEUR(custo)}</div></div>
+              <div>{rotulo("Preço de venda (ex-IVA)")}<div style={{ fontWeight: 800, color: T.walnutDark }}>{fmtEUR(pv)}</div></div>
+              <Field label="Preço fixo € (opcional)"><input style={{ ...inputStyle, width: 110 }} inputMode="decimal" placeholder="auto" defaultValue={a.precoFixo ?? ""} key={a.id + "pf" + a.precoFixo} onBlur={(e) => setArtigo(a.id, { precoFixo: e.target.value === "" ? null : num(e.target.value) })} /></Field>
+              {pv > 0 && custo > 0 && <div>{rotulo("Margem")}<div style={{ fontWeight: 750 }}>{(((pv - custo) / pv) * 100).toFixed(1)}%</div></div>}
+            </div>
           </div>
         );
       })}
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <select style={{ ...selectStyle, flex: "1 1 220px" }} value={escolha} onChange={(e) => addCatalogo(e.target.value)}>
-          <option value="">+ Juntar do catálogo…</option>
-          {CATEGORIAS_CATALOGO.map((cg) => (
-            <optgroup key={cg} label={cg}>
-              {catalogo.filter((c) => c.categoria === cg).map((c) => <option key={c.id} value={c.id}>{c.nome} · {fmtEUR(c.preco)}/{c.unidade}</option>)}
-            </optgroup>
-          ))}
-        </select>
-        <Btn icon={Plus} variant="ghost" onClick={addLivre}>Linha livre</Btn>
-      </div>
+      <div><Btn icon={Plus} variant="ghost" onClick={addArtigo}>Novo artigo</Btn></div>
 
       <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 12, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 12, alignItems: "end" }}>
         <Field label="Margem sobre o preço %"><input style={inputStyle} inputMode="decimal" defaultValue={Math.round(margem * 1000) / 10} key={"m" + margem} onBlur={(e) => save({ margem: Math.min(Math.max(num(e.target.value), 0), 90) / 100 })} /></Field>
-        <div><div style={{ fontSize: 11.5, opacity: 0.6, fontWeight: 600 }}>Custo total</div><div style={{ fontWeight: 800, fontSize: 18 }}>{fmtEUR(t.custo)}</div></div>
-        <div><div style={{ fontSize: 11.5, opacity: 0.6, fontWeight: 600 }}>Preço de venda (ex-IVA)</div><div style={{ fontWeight: 800, fontSize: 18, color: T.walnutDark }}>{fmtEUR(t.pvpExIva)}</div></div>
-        <div><div style={{ fontSize: 11.5, opacity: 0.6, fontWeight: 600 }}>Lucro</div><div style={{ fontWeight: 800, fontSize: 18, color: T.green }}>{fmtEUR(t.lucro)}</div></div>
-        <div><div style={{ fontSize: 11.5, opacity: 0.6, fontWeight: 600 }}>Total com IVA ({iva.label})</div><div style={{ fontWeight: 800, fontSize: 18 }}>{fmtEUR(t.totalComIva)}</div></div>
+        <div>{rotulo("Custo total")}<div style={{ fontWeight: 800, fontSize: 18 }}>{fmtEUR(t.custo)}</div></div>
+        <div>{rotulo("Preço de venda (ex-IVA)")}<div style={{ fontWeight: 800, fontSize: 18, color: T.walnutDark }}>{fmtEUR(t.pvpExIva)}</div></div>
+        <div>{rotulo("Lucro")}<div style={{ fontWeight: 800, fontSize: 18, color: T.green }}>{fmtEUR(t.lucro)} <span style={{ fontSize: 12, opacity: 0.7 }}>({t.margemReal.toFixed(1)}%)</span></div></div>
+        <div>{rotulo(`Total com IVA (${iva.label})`)}<div style={{ fontWeight: 800, fontSize: 18 }}>{fmtEUR(t.totalComIva)}</div></div>
       </div>
 
       {duvidosas.length > 0 && (
@@ -1438,9 +1479,22 @@ function OrcamentoObra({ obra, commit, catalogo = [] }) {
           <AlertTriangle size={15} /> {duvidosas.length} linha(s) com preço por confirmar ou sem custo — confirma antes de enviar.
         </div>
       )}
-      {linhas.length > 0 && (
+
+      <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 12, display: "grid", gap: 10 }}>
+        {rotulo("Texto da proposta ao cliente")}
+        <div style={{ display: "grid", gridTemplateColumns: "100px 1fr", gap: 10 }}>
+          <Field label="Validade (dias)"><input style={inputStyle} inputMode="numeric" defaultValue={prop.validadeDias} key={"v" + prop.validadeDias} onBlur={(e) => setProp({ validadeDias: Math.max(1, Math.round(num(e.target.value)) || 8) })} /></Field>
+          <Field label="Prazo de execução estimado"><input style={inputStyle} placeholder="ex.: 6 a 8 semanas após adjudicação" defaultValue={prop.prazo} onBlur={(e) => setProp({ prazo: e.target.value })} /></Field>
+        </div>
+        <Field label="Condições de pagamento"><textarea style={textareaStyle} rows={2} defaultValue={prop.condicoes} onBlur={(e) => setProp({ condicoes: e.target.value })} /></Field>
+        <Field label="Notas (incluído / não incluído, cores, medidas…) — uma linha por parágrafo"><textarea style={textareaStyle} rows={4} defaultValue={prop.notas} onBlur={(e) => setProp({ notas: e.target.value })} /></Field>
+      </div>
+
+      {artigos.length > 0 && (
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <Btn icon={Check} disabled={obra.valorOrcamento === t.pvpExIva} onClick={() => commit({ valorOrcamento: t.pvpExIva })}>Usar {fmtEUR(t.pvpExIva)} como valor orçamentado</Btn>
+          <Btn icon={Download} disabled={!!aGerar} onClick={() => gerar("proposta")}>{aGerar === "proposta" ? "A gerar…" : "Proposta comercial (PDF)"}</Btn>
+          <Btn icon={Download} variant="ghost" disabled={!!aGerar} onClick={() => gerar("ficha")}>{aGerar === "ficha" ? "A gerar…" : "Ficha de custo interna (PDF)"}</Btn>
+          <Btn icon={Check} variant="ghost" disabled={obra.valorOrcamento === t.pvpExIva} onClick={() => commit({ valorOrcamento: t.pvpExIva })}>Usar {fmtEUR(t.pvpExIva)} como valor orçamentado</Btn>
           {obra.valorOrcamento != null && obra.valorOrcamento !== t.pvpExIva && <span style={{ fontSize: 12, opacity: 0.6 }}>Valor atual na ficha: {fmtEUR(obra.valorOrcamento)}</span>}
         </div>
       )}
@@ -1904,12 +1958,6 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
 
           <CutDivider label="Cliente & Dono de Obra" />
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label="Tipo de cliente (margem sugerida)">
-              <select style={selectStyle} value={local.tipoCliente || ""} onChange={(e) => commit({ tipoCliente: e.target.value })}>
-                <option value="">— não definido —</option>
-                {CLIENTE_TIPOS.map((c) => <option key={c.key} value={c.key}>{c.label} · {c.margem}%</option>)}
-              </select>
-            </Field>
             <Field label="Email do cliente">
               <input style={inputStyle} value={local.clienteEmail || ""} onChange={(e) => set({ clienteEmail: e.target.value })} onBlur={() => commitClienteContacto({ clienteEmail: local.clienteEmail })} />
             </Field>
@@ -2074,14 +2122,6 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
                     {margemRealPct !== null ? `${margemRealPct.toFixed(1)}%` : "—"}
                   </div>
                 </div>
-                {local.tipoCliente && (
-                  <div>
-                    <div style={{ fontSize: 10.5, textTransform: "uppercase", opacity: 0.6, fontWeight: 600 }}>Margem sugerida</div>
-                    <div style={{ fontFamily: "'Inter', sans-serif", fontWeight: 700, fontSize: 15, opacity: 0.7 }}>
-                      {tipoClienteOf(local.tipoCliente)?.margem}%
-                    </div>
-                  </div>
-                )}
               </div>
             )}
           </div>
