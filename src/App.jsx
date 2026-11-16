@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { supabase } from "./supabaseClient";
 import { CATALOGO_SEED } from "./orcamentacao/catalogoSeed";
 import { CATEGORIAS_CATALOGO, UNIDADES as UNIDADES_ORC, estadoPreco, diasDesde, DIAS_PRECO_ANTIGO, MARGEM_PADRAO, custoLinha, custoArtigo, precoArtigo, normalizaOrcamento, totaisOrcamento, linhasComPrecoDuvidoso } from "./orcamentacao/calc";
-import { PROPOSTA_DEFAULTS } from "./orcamentacao/pdfDefaults";
+import { PROPOSTA_DEFAULTS, PAGAMENTO_PRESETS, VALIDADE_DIAS, presetAutomatico, condicoesPagamento } from "./orcamentacao/pdfDefaults";
 import {
   Plus, Search, X, Mail, Phone, Calendar, AlertTriangle, TrendingUp,
   Package, CheckCircle2, XCircle, Clock, Download, Building2, ChevronDown,
@@ -1047,7 +1047,7 @@ function useAvisoSeparador(n) {
     const img = new Image();
     img.onload = () => { logoRef.current = img; desenhar(img); };
     img.onerror = () => { logoRef.current = null; desenhar(null); };
-    img.src = `${import.meta.env.BASE_URL}logo.png`;
+    img.src = `${import.meta.env.BASE_URL}logo-completo.png`;
   }, [n, desenhar]);
 }
 
@@ -1349,7 +1349,7 @@ function MargemOrcamento({ obra, commit }) {
 /* ---------- Orçamento por artigos (custo → preço com margem → PDFs) ---------- */
 async function logoDataUrl() {
   try {
-    const r = await fetch(`${import.meta.env.BASE_URL}logo.png`);
+    const r = await fetch(`${import.meta.env.BASE_URL}logo-completo.png`);
     const blob = await r.blob();
     return await new Promise((res) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(blob); });
   } catch (e) { return null; }
@@ -1482,11 +1482,18 @@ export function OrcamentoObra({ obra, commit, catalogo = [] }) {
 
       <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 12, display: "grid", gap: 10 }}>
         {rotulo("Texto da proposta ao cliente")}
-        <div style={{ display: "grid", gridTemplateColumns: "100px 1fr", gap: 10 }}>
-          <Field label="Validade (dias)"><input style={inputStyle} inputMode="numeric" defaultValue={prop.validadeDias} key={"v" + prop.validadeDias} onBlur={(e) => setProp({ validadeDias: Math.max(1, Math.round(num(e.target.value)) || 8) })} /></Field>
-          <Field label="Prazo de execução estimado"><input style={inputStyle} placeholder="ex.: 6 a 8 semanas após adjudicação" defaultValue={prop.prazo} onBlur={(e) => setProp({ prazo: e.target.value })} /></Field>
-        </div>
-        <Field label="Condições de pagamento"><textarea style={textareaStyle} rows={2} defaultValue={prop.condicoes} onBlur={(e) => setProp({ condicoes: e.target.value })} /></Field>
+        <Field label="Prazo de execução estimado"><input style={inputStyle} placeholder="ex.: 6 a 8 semanas após adjudicação" defaultValue={prop.prazo} onBlur={(e) => setProp({ prazo: e.target.value })} /></Field>
+        <Field label="Condições de pagamento">
+          <select style={selectStyle} value={prop.pagamento} onChange={(e) => setProp({ pagamento: e.target.value, ...(e.target.value === "custom" && !prop.condicoes ? { condicoes: condicoesPagamento(orc.proposta, t.pvpExIva) } : {}) })}>
+            <option value="auto">Automático pelo valor ({PAGAMENTO_PRESETS.find((x) => x.key === presetAutomatico(t.pvpExIva)).label})</option>
+            {PAGAMENTO_PRESETS.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}
+            <option value="custom">Personalizado…</option>
+          </select>
+        </Field>
+        {prop.pagamento === "custom"
+          ? <textarea style={textareaStyle} rows={2} defaultValue={prop.condicoes} onBlur={(e) => setProp({ condicoes: e.target.value })} />
+          : <div style={{ fontSize: 12.5, opacity: 0.7 }}>{condicoesPagamento(orc.proposta, t.pvpExIva)}</div>}
+        <div style={{ fontSize: 12, opacity: 0.6 }}>Validade: {VALIDADE_DIAS} dias. Depois disso o orçamento tem de ser reavaliado.</div>
         <Field label="Notas (incluído / não incluído, cores, medidas…) — uma linha por parágrafo"><textarea style={textareaStyle} rows={4} defaultValue={prop.notas} onBlur={(e) => setProp({ notas: e.target.value })} /></Field>
       </div>
 

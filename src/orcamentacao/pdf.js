@@ -2,7 +2,7 @@
 // jsPDF só é carregado quando o utilizador gera um PDF (import dinâmico no chamador).
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
-import { PROPOSTA_DEFAULTS } from "./pdfDefaults";
+import { PROPOSTA_DEFAULTS, VALIDADE_DIAS, condicoesPagamento } from "./pdfDefaults";
 import { custoArtigo, precoArtigo, custoLinha, totaisOrcamento, normalizaOrcamento } from "./calc";
 
 export const EMPRESA = {
@@ -31,11 +31,7 @@ const dataPT = (d = new Date()) => `${String(d.getDate()).padStart(2, "0")}/${St
 const refSegura = (r) => String(r || "orcamento").replace(/[^\w.-]+/g, "-");
 
 function cabecalho(doc, logo, largura) {
-  if (logo) { try { doc.addImage(logo, "PNG", MARGIN, 9, 20, 20); } catch (e) { /* sem logótipo */ } }
-  doc.setFont("times", "normal"); doc.setFontSize(21); doc.setTextColor(...GOLD);
-  doc.text("CARPINOVA", MARGIN + 25, 20, { charSpace: 1.6 });
-  doc.setFont("helvetica", "normal"); doc.setFontSize(5.5); doc.setTextColor(120, 120, 120);
-  doc.text("PROCESSO EM CADA DETALHE", MARGIN + 25, 24.5, { charSpace: 1.1 });
+  if (logo) { try { doc.addImage(logo, "PNG", MARGIN, 8, 56, 21.7); } catch (e) { /* sem logótipo */ } }
   doc.setFillColor(...NAVY); doc.rect(MARGIN, 32, largura, 5.2, "F");
   doc.setFont("helvetica", "normal"); doc.setFontSize(6.8); doc.setTextColor(255, 255, 255);
   doc.text(`${EMPRESA.nome} | NIF ${EMPRESA.nif} | ${EMPRESA.morada} | ${EMPRESA.site} | ${EMPRESA.telefone}`, MARGIN + 1.5, 35.6);
@@ -81,7 +77,7 @@ export function gerarPropostaPDF({ obra, orcamento, logo }) {
   doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(...NAVY);
   doc.text(`PROPOSTA COMERCIAL - ${obra.ref || ""}`, MARGIN, 45);
   doc.setFont("helvetica", "italic"); doc.setFontSize(7.5); doc.setTextColor(110, 110, 110);
-  const sub = [obra.cliente && `Cliente: ${obra.cliente}`, (obra.moradaObra || obra.projeto) && `Local da obra: ${obra.moradaObra || obra.projeto}`, `Data: ${dataPT()}`, `Validade: ${p.validadeDias} dias`].filter(Boolean).join(" | ");
+  const sub = [obra.cliente && `Cliente: ${obra.cliente}`, (obra.moradaObra || obra.projeto) && `Local da obra: ${obra.moradaObra || obra.projeto}`, `Data: ${dataPT()}`, `Validade: ${VALIDADE_DIAS} dias`].filter(Boolean).join(" | ");
   doc.text(doc.splitTextToSize(sub, W), MARGIN, 49.5);
 
   const corpo = o.artigos.map((a) => [String(a.num || ""), a.descricao || "", eur(precoArtigo(a, o.margem))]);
@@ -112,7 +108,7 @@ export function gerarPropostaPDF({ obra, orcamento, logo }) {
   });
 
   let y = doc.lastAutoTable.finalY + 7;
-  y = paragrafos(doc, y, [p.condicoes && `Condições de pagamento: ${p.condicoes}`, p.prazo && `Prazo de execução estimado: ${p.prazo}`], W);
+  y = paragrafos(doc, y, [`Condições de pagamento: ${condicoesPagamento(o.proposta, t.pvpExIva)}`, p.prazo && `Prazo de execução estimado: ${p.prazo}`], W);
   y += 1;
   const notas = String(p.notas || "").split("\n").map((x) => x.trim()).filter(Boolean);
   paragrafos(doc, y, notas, W, { size: 6.3, gap: 0.8 });

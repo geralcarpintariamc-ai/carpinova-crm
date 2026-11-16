@@ -34,7 +34,7 @@ export function custoLinha(l) {
   return r2(num(l.qtd) * num(l.custoUnit) * (1 + num(l.desperdicio)));
 }
 
-export const ARREDONDAR_A = 5; // o preço de cada artigo sobe para o múltiplo de 5 € seguinte (sempre a favor da margem)
+export const ARREDONDAR_A = 1; // o preço de cada artigo sobe ao euro inteiro seguinte (sempre a favor da margem)
 
 const arredondaCima = (v, passo = ARREDONDAR_A) => (passo > 0 ? Math.ceil(r2(v) / passo - 1e-9) * passo : r2(v));
 
