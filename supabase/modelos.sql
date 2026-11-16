@@ -8,4 +8,6 @@ alter table public.modelos enable row level security;
 drop policy if exists "modelos autenticados" on public.modelos;
 create policy "modelos autenticados" on public.modelos
   for all to authenticated using (true) with check (true);
-alter publication supabase_realtime add table public.modelos;
+do $$ begin
+  alter publication supabase_realtime add table public.modelos;
+exception when duplicate_object then null; end $$;

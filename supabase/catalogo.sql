@@ -12,4 +12,6 @@ drop policy if exists "catalogo autenticados" on public.catalogo;
 create policy "catalogo autenticados" on public.catalogo
   for all to authenticated using (true) with check (true);
 
-alter publication supabase_realtime add table public.catalogo;
+do $$ begin
+  alter publication supabase_realtime add table public.catalogo;
+exception when duplicate_object then null; end $$;
