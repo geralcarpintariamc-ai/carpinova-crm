@@ -644,6 +644,38 @@ function useFornecedoresStore() {
    CATÁLOGO STORE — custos de materiais, ferragens, acabamentos e mão de obra.
    Cada preço tem data; passados DIAS_PRECO_ANTIGO dias pede confirmação.
    ============================================================ */
+function useModelosStore() {
+  const [modelos, setModelos] = useState([]);
+  useEffect(() => {
+    let channel; let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase.from("modelos").select("id, payload").order("updated_at", { ascending: true });
+      if (cancelled) return;
+      if (error) { console.error("Erro a carregar modelos (correr supabase/modelos.sql?):", error); return; }
+      setModelos((data || []).map((r) => ({ ...r.payload, id: r.id })));
+      channel = supabase.channel("modelos-realtime").on("postgres_changes", { event: "*", schema: "public", table: "modelos" }, (msg) => {
+        setModelos((cur) => {
+          if (msg.eventType === "DELETE") return cur.filter((m) => m.id !== msg.old.id);
+          const inc = { ...msg.new.payload, id: msg.new.id };
+          return cur.some((m) => m.id === inc.id) ? cur.map((m) => (m.id === inc.id ? inc : m)) : [...cur, inc];
+        });
+      }).subscribe();
+    })();
+    return () => { cancelled = true; if (channel) supabase.removeChannel(channel); };
+  }, []);
+  const addModelo = useCallback(async (m) => {
+    const novo = { id: `mod_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, criado: new Date().toISOString(), ...m };
+    setModelos((cur) => [...cur, novo]);
+    const { error } = await supabase.from("modelos").upsert({ id: novo.id, payload: novo, updated_at: new Date().toISOString() }, { onConflict: "id" });
+    if (error) { console.error("Erro a gravar modelo:", error); window.alert("Não consegui gravar o modelo. Falta correr o SQL dos modelos no Supabase?"); }
+  }, []);
+  const deleteModelo = useCallback((id) => {
+    setModelos((cur) => cur.filter((m) => m.id !== id));
+    supabase.from("modelos").delete().eq("id", id).then(({ error }) => { if (error) console.error("Erro a eliminar modelo:", error); });
+  }, []);
+  return { modelos, addModelo, deleteModelo };
+}
+
 function useCatalogoStore() {
   const [catalogo, setCatalogo] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1356,7 +1388,7 @@ async function logoDataUrl() {
   } catch (e) { return null; }
 }
 
-export function OrcamentoObra({ obra, commit, catalogo = [] }) {
+export function OrcamentoObra({ obra, commit, catalogo = [], modelos = [], onAddModelo }) {
   const orc = normalizaOrcamento(obra.orcamento);
   const { margem, artigos } = orc;
   const prop = { ...PROPOSTA_DEFAULTS, ...orc.proposta };
@@ -1364,7 +1396,7 @@ export function OrcamentoObra({ obra, commit, catalogo = [] }) {
   const [aGerar, setAGerar] = useState("");
   const [importar, setImportar] = useState(false);
   const [soSemPreco, setSoSemPreco] = useState(false);
-  const [bulk, setBulk] = useState({ palavra: "", unidade: "", custo: "" });
+  const [bulk, setBulk] = useState({ palavra: "", unidade: "", custo: "", modelo: "" });
   const opcoesIva = { iva: 0.23, autoliquidacao: iva.key === "autoliquidacao", isento: iva.key === "isento" };
   const num = (v) => { const n = parseFloat(String(v).replace(",", ".")); return Number.isFinite(n) ? n : 0; };
 
@@ -1401,6 +1433,22 @@ export function OrcamentoObra({ obra, commit, catalogo = [] }) {
     setBulk({ ...bulk, custo: "" });
   };
   const importarArtigos = (novos) => { save({ artigos: [...artigos, ...novos] }); setImportar(false); };
+  const copiaLinhas = (m) => m.linhas.map((l) => ({ ...l, id: uid(), rapido: m.linhas.length === 1 && l.rapido }));
+  const aplicarModelo = (aid, mid) => { const m = modelos.find((x) => x.id === mid); if (m) setArtigo(aid, { linhas: copiaLinhas(m) }); };
+  const guardarModelo = (a) => {
+    if (!a.linhas.length) { window.alert("Este artigo ainda não tem custos para guardar."); return; }
+    const nome = window.prompt("Nome do modelo (ex.: Porta interior MDF lacado 0,90×2,10):", (a.descricao || "").split("\n")[0].slice(0, 70));
+    if (!nome || !nome.trim() || !onAddModelo) return;
+    onAddModelo({ nome: nome.trim(), unidade: a.unidade || "un", linhas: a.linhas.map(({ id, ...l }) => l) });
+  };
+  const aplicarModeloBulk = () => {
+    const m = modelos.find((x) => x.id === bulk.modelo);
+    if (!m || !alvoBulk.length) return;
+    const ids = new Set(alvoBulk.map((a) => a.id));
+    save({ artigos: artigos.map((a) => (ids.has(a.id) ? { ...a, linhas: copiaLinhas(m) } : a)) });
+    setBulk({ ...bulk, modelo: "" });
+  };
+  const custoModelo = (m) => m.linhas.reduce((s, l) => s + custoLinha(l), 0);
   const nComQtd = artigos.filter(temQtd).length;
   const nSemPreco = artigos.filter((a) => !(custoArtigo(a) > 0) && !(a.precoFixo > 0)).length;
 
@@ -1436,6 +1484,12 @@ export function OrcamentoObra({ obra, commit, catalogo = [] }) {
             <Field label="Custo por unidade €"><input style={{ ...inputStyle, width: 120 }} inputMode="decimal" value={bulk.custo} onChange={(e) => setBulk({ ...bulk, custo: e.target.value })} /></Field>
             <Btn small disabled={!(num(bulk.custo) > 0) || !alvoBulk.length} onClick={aplicarBulk}>Aplicar a {alvoBulk.length} artigo(s)</Btn>
           </div>
+          {modelos.length > 0 && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+              <Field label="…ou aplicar um modelo guardado"><select style={{ ...selectStyle, minWidth: 260 }} value={bulk.modelo} onChange={(e) => setBulk({ ...bulk, modelo: e.target.value })}><option value="">escolher modelo…</option>{modelos.map((m) => <option key={m.id} value={m.id}>{m.nome} · {fmtEUR(custoModelo(m))}/{m.unidade}</option>)}</select></Field>
+              <Btn small disabled={!bulk.modelo || !alvoBulk.length} onClick={aplicarModeloBulk}>Aplicar a {alvoBulk.length} artigo(s)</Btn>
+            </div>
+          )}
         </div>
       )}
 
@@ -1456,6 +1510,7 @@ export function OrcamentoObra({ obra, commit, catalogo = [] }) {
                 <Field label="Qtd."><input style={{ ...inputStyle, width: 90 }} inputMode="decimal" defaultValue={a.qtd} key={a.id + "aq" + a.qtd} onBlur={(e) => setArtigo(a.id, { qtd: num(e.target.value) })} /></Field>
                 <Field label="Unid."><select style={{ ...selectStyle, width: 80 }} value={a.unidade || "un"} onChange={(e) => setArtigo(a.id, { unidade: e.target.value })}>{UNIDADES_ORC.map((u) => <option key={u}>{u}</option>)}</select></Field>
                 {rapidoDe(a) && <Field label={`Custo por ${a.unidade || "un"} (€)`}><input style={{ ...inputStyle, width: 120 }} inputMode="decimal" placeholder="0,00" defaultValue={a.linhas[0]?.custoUnit ?? ""} key={a.id + "cr" + (a.linhas[0]?.custoUnit ?? "")} onBlur={(e) => setCustoRapido(a, num(e.target.value))} /></Field>}
+                {modelos.length > 0 && <Field label="Modelo"><select style={{ ...selectStyle, width: 190 }} value="" onChange={(e) => e.target.value && aplicarModelo(a.id, e.target.value)}><option value="">Aplicar modelo…</option>{modelos.map((m) => <option key={m.id} value={m.id}>{m.nome} · {fmtEUR(custoModelo(m))}/{m.unidade}</option>)}</select></Field>}
                 {rapidoDe(a)
                   ? <Btn small variant="ghost" onClick={() => setArtigo(a.id, { linhas: a.linhas.length ? a.linhas.map((l) => ({ ...l, rapido: false })) : [{ id: uid(), descricao: "", unidade: "un", qtd: 1, custoUnit: 0, desperdicio: 0 }] })}>Detalhar em linhas</Btn>
                   : <span style={{ fontSize: 12, opacity: 0.65, paddingBottom: 9 }}>As linhas abaixo são o custo de 1 {a.unidade || "un"}.</span>}
@@ -1509,6 +1564,7 @@ export function OrcamentoObra({ obra, commit, catalogo = [] }) {
               <div>{rotulo(temQtd(a) ? `Custo (× ${qtdArtigo(a)})` : "Custo")}<div style={{ fontWeight: 750 }}>{fmtEUR(custo)}</div></div>
               <div>{rotulo("Preço de venda (ex-IVA)")}<div style={{ fontWeight: 800, color: T.walnutDark }}>{fmtEUR(pv)}</div></div>
               <Field label="Preço fixo € (opcional)"><input style={{ ...inputStyle, width: 110 }} inputMode="decimal" placeholder="auto" defaultValue={a.precoFixo ?? ""} key={a.id + "pf" + a.precoFixo} onBlur={(e) => setArtigo(a.id, { precoFixo: e.target.value === "" ? null : num(e.target.value) })} /></Field>
+              {a.linhas.length > 0 && <Btn small variant="ghost" onClick={() => guardarModelo(a)}>Guardar como modelo</Btn>}
               {pv > 0 && custo > 0 && <div>{rotulo("Margem")}<div style={{ fontWeight: 750 }}>{(((pv - custo) / pv) * 100).toFixed(1)}%</div></div>}
             </div>
           </div>
@@ -1866,7 +1922,7 @@ function SeguimentoObra({ obra, emails, onPatch, onEstado }) {
   );
 }
 
-function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChangeEstado, onAddHistorico, onDelete, fornecedorNomes, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespesa, onSyncCliente, clientesNomes, equipa, catalogo = [] }) {
+function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChangeEstado, onAddHistorico, onDelete, fornecedorNomes, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespesa, onSyncCliente, clientesNomes, equipa, catalogo = [], modelos = [], onAddModelo }) {
   const [local, setLocal] = useState(obra);
   const [novaNota, setNovaNota] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -2165,7 +2221,7 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
           )}
 
           <CutDivider label="Orçamento (custos e margem)" />
-          <OrcamentoObra obra={local} commit={commit} catalogo={catalogo} />
+          <OrcamentoObra obra={local} commit={commit} catalogo={catalogo} modelos={modelos} onAddModelo={onAddModelo} />
 
           <CutDivider label="Valores" />
           <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
@@ -5332,7 +5388,7 @@ function EmailItem({ email, obras, onUpdate, onCriarObra, mostrarObra = true }) 
 /* ============================================================
    CATÁLOGO — lista de custos com data de cada preço
    ============================================================ */
-function Catalogo({ catalogo, onAdd, onUpdate, onSetPreco, onConfirmar, onDelete }) {
+function Catalogo({ modelos = [], onDeleteModelo, catalogo, onAdd, onUpdate, onSetPreco, onConfirmar, onDelete }) {
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("todas");
   const [soPendentes, setSoPendentes] = useState(false);
@@ -5366,6 +5422,20 @@ function Catalogo({ catalogo, onAdd, onUpdate, onSetPreco, onConfirmar, onDelete
         <KpiCard icon={AlertTriangle} label="Por confirmar" value={contagem.porConfirmar} sub="sem data de preço" accent={contagem.porConfirmar ? T.rust : undefined} />
         <KpiCard icon={Clock} label="Preço antigo" value={contagem.antigo} sub={`há mais de ${DIAS_PRECO_ANTIGO} dias`} accent={contagem.antigo ? T.amber : undefined} />
       </div>
+
+      {modelos.length > 0 && (
+        <div style={{ border: `1px solid ${T.line}`, borderRadius: 14, padding: 12, marginBottom: 16, display: "grid", gap: 6 }}>
+          <div style={{ fontWeight: 750 }}>Modelos de artigo guardados ({modelos.length})</div>
+          {modelos.map((m) => (
+            <div key={m.id} style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 13 }}>
+              <span style={{ flex: 1 }}>{m.nome}</span>
+              <span style={{ opacity: 0.7 }}>{m.linhas.length} linha(s) · {fmtEUR(m.linhas.reduce((s, l) => s + custoLinha(l), 0))}/{m.unidade}</span>
+              <button className="icon-btn" title="Eliminar modelo" onClick={() => { if (window.confirm(`Eliminar o modelo "${m.nome}"?`)) onDeleteModelo(m.id); }}><Trash2 size={15} /></button>
+            </div>
+          ))}
+          <div style={{ fontSize: 11.5, opacity: 0.6 }}>Os custos ficam como foram guardados. Nas linhas ligadas ao catálogo, o orçamento avisa quando o preço do catálogo mudou.</div>
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
         <div style={{ position: "relative", flex: "1 1 240px", maxWidth: 360 }}>
@@ -5553,6 +5623,7 @@ function Carpinova({ onSignOut, userEmail }) {
   const { clientes, addCliente, updateCliente, deleteCliente, syncCliente } = useClientesStore();
   const { equipa, addMembro, updateMembro, deleteMembro } = useEquipaStore();
   const { catalogo, addArtigo, updateArtigo, setPreco, confirmarPreco, deleteArtigo } = useCatalogoStore();
+  const { modelos, addModelo, deleteModelo } = useModelosStore();
   const { emails, updateEmail } = useEmailsStore(); // emails já importados continuam ligados às obras; a sincronização foi desligada
   useAvisoSeparador(0);
   const nSeguimentos = useMemo(() => seguimentosPendentes(obras, emails).length, [obras, emails]);
@@ -5680,7 +5751,7 @@ function Carpinova({ onSignOut, userEmail }) {
           {tab === "relatorios" && <Relatorios obras={obras} despesas={despesas} onOpenObra={setSelectedId} />}
           {tab === "faturas" && <Faturas obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onOpenObra={setSelectedId} fornecedorNomes={fornecedores.map((f) => f.nome)} />}
           {tab === "clientes" && <Clientes obras={obras} clientes={clientes} onAddCliente={addCliente} onUpdateCliente={updateCliente} onDeleteCliente={deleteCliente} onOpenObra={setSelectedId} />}
-          {tab === "catalogo" && <Catalogo catalogo={catalogo} onAdd={addArtigo} onUpdate={updateArtigo} onSetPreco={setPreco} onConfirmar={confirmarPreco} onDelete={deleteArtigo} />}
+          {tab === "catalogo" && <Catalogo modelos={modelos} onDeleteModelo={deleteModelo} catalogo={catalogo} onAdd={addArtigo} onUpdate={updateArtigo} onSetPreco={setPreco} onConfirmar={confirmarPreco} onDelete={deleteArtigo} />}
           {tab === "fornecedores" && <Fornecedores fornecedores={fornecedores} onAdd={addFornecedor} onUpdate={updateFornecedor} onDelete={deleteFornecedor} despesas={despesas} obras={obras} onOpenObra={setSelectedId} />}
         </main>
       </div>
@@ -5691,7 +5762,7 @@ function Carpinova({ onSignOut, userEmail }) {
       )}
 
       {selected && (
-        <ObraModal key={selected.id} emails={emails} onUpdateEmail={updateEmail} obra={selected} onClose={() => setSelectedId(null)} onUpdate={updateObra} onChangeEstado={changeEstado} onAddHistorico={addHistorico} onDelete={deleteObra} fornecedorNomes={fornecedores.map((f) => f.nome)} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onSyncCliente={syncCliente} clientesNomes={clientesNomesUnicos} equipa={equipa} catalogo={catalogo} />
+        <ObraModal key={selected.id} emails={emails} onUpdateEmail={updateEmail} obra={selected} onClose={() => setSelectedId(null)} onUpdate={updateObra} onChangeEstado={changeEstado} onAddHistorico={addHistorico} onDelete={deleteObra} fornecedorNomes={fornecedores.map((f) => f.nome)} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onSyncCliente={syncCliente} clientesNomes={clientesNomesUnicos} equipa={equipa} catalogo={catalogo} modelos={modelos} onAddModelo={addModelo} />
       )}
       {novaObraOpen && (
         <NovaObraModal
