@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { supabase } from "./supabaseClient";
+import { CATALOGO_SEED } from "./orcamentacao/catalogoSeed";
+import { CATEGORIAS_CATALOGO, UNIDADES as UNIDADES_ORC, estadoPreco, diasDesde, DIAS_PRECO_ANTIGO } from "./orcamentacao/calc";
 import {
   Plus, Search, X, Mail, Phone, Calendar, AlertTriangle, TrendingUp,
   Package, CheckCircle2, XCircle, Clock, Download, Building2, ChevronDown,
@@ -643,6 +645,88 @@ function useFornecedoresStore() {
   }, []);
 
   return { fornecedores, loading, addFornecedor, updateFornecedor, deleteFornecedor };
+}
+
+/* ============================================================
+   CATÁLOGO STORE — custos de materiais, ferragens, acabamentos e mão de obra.
+   Cada preço tem data; passados DIAS_PRECO_ANTIGO dias pede confirmação.
+   ============================================================ */
+function useCatalogoStore() {
+  const [catalogo, setCatalogo] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const cRef = useRef([]);
+  cRef.current = catalogo;
+
+  useEffect(() => {
+    let channel;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase.from("catalogo").select("id, payload").order("updated_at", { ascending: true });
+      if (cancelled) return;
+      if (error) { console.error("Erro a carregar catálogo:", error); setLoading(false); return; }
+      if (data && data.length > 0) {
+        setCatalogo(data.map((r) => ({ ...r.payload, id: r.id })));
+      } else {
+        // catálogo vazio: carrega o ponto de partida (preços por confirmar)
+        const rows = CATALOGO_SEED.map((c) => ({ id: c.id, payload: c, updated_at: new Date().toISOString() }));
+        const { error: e2 } = await supabase.from("catalogo").upsert(rows, { onConflict: "id" });
+        if (e2) console.error("Erro a criar catálogo inicial:", e2);
+        setCatalogo(CATALOGO_SEED);
+      }
+      setLoading(false);
+      channel = supabase
+        .channel("catalogo-realtime")
+        .on("postgres_changes", { event: "*", schema: "public", table: "catalogo" }, (msg) => {
+          setCatalogo((cur) => {
+            if (msg.eventType === "DELETE") return cur.filter((c) => c.id !== msg.old.id);
+            const incoming = { ...msg.new.payload, id: msg.new.id };
+            return cur.some((c) => c.id === incoming.id) ? cur.map((c) => (c.id === incoming.id ? incoming : c)) : [...cur, incoming];
+          });
+        })
+        .subscribe();
+    })();
+    return () => { cancelled = true; if (channel) supabase.removeChannel(channel); };
+  }, []);
+
+  const persistRow = useCallback(async (id, payload) => {
+    const { error } = await supabase.from("catalogo").upsert({ id, payload, updated_at: new Date().toISOString() }, { onConflict: "id" });
+    if (error) console.error("Erro a gravar artigo do catálogo:", error);
+  }, []);
+
+  const addArtigo = useCallback((partial) => {
+    const novo = { id: `cat_${slugify(partial.nome || "novo")}_${Date.now().toString(36)}`, nome: "", categoria: "Painel", unidade: "m²", preco: 0, precoData: null, fornecedor: "", espessura: null, nota: "", historico: [], ...partial };
+    setCatalogo((cur) => [...cur, novo]);
+    persistRow(novo.id, novo);
+    return novo.id;
+  }, [persistRow]);
+
+  const updateArtigo = useCallback((id, patch) => {
+    const next = cRef.current.map((c) => (c.id === id ? { ...c, ...patch } : c));
+    setCatalogo(next);
+    const a = next.find((c) => c.id === id);
+    if (a) persistRow(id, a);
+  }, [persistRow]);
+
+  // Atualizar o preço regista a data de hoje e guarda o anterior no histórico (últimos 12).
+  const setPreco = useCallback((id, preco) => {
+    const atual = cRef.current.find((c) => c.id === id);
+    if (!atual) return;
+    const hoje = new Date().toISOString();
+    const historico = atual.precoData ? [{ preco: atual.preco, data: atual.precoData }, ...(atual.historico || [])].slice(0, 12) : (atual.historico || []);
+    updateArtigo(id, { preco, precoData: hoje, historico });
+  }, [updateArtigo]);
+
+  const confirmarPreco = useCallback((id) => {
+    const atual = cRef.current.find((c) => c.id === id);
+    if (atual) updateArtigo(id, { precoData: new Date().toISOString() });
+  }, [updateArtigo]);
+
+  const deleteArtigo = useCallback((id) => {
+    setCatalogo((cur) => cur.filter((c) => c.id !== id));
+    supabase.from("catalogo").delete().eq("id", id).then(({ error }) => { if (error) console.error("Erro a eliminar artigo:", error); });
+  }, []);
+
+  return { catalogo, loading, addArtigo, updateArtigo, setPreco, confirmarPreco, deleteArtigo };
 }
 
 /* ============================================================
@@ -4955,11 +5039,96 @@ function EmailItem({ email, obras, onUpdate, onCriarObra, mostrarObra = true }) 
   );
 }
 
+/* ============================================================
+   CATÁLOGO — lista de custos com data de cada preço
+   ============================================================ */
+function Catalogo({ catalogo, onAdd, onUpdate, onSetPreco, onConfirmar, onDelete }) {
+  const [q, setQ] = useState("");
+  const [cat, setCat] = useState("todas");
+  const [soPendentes, setSoPendentes] = useState(false);
+
+  const itens = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    return catalogo
+      .filter((c) => (cat === "todas" || c.categoria === cat))
+      .filter((c) => !term || `${c.nome} ${c.fornecedor || ""}`.toLowerCase().includes(term))
+      .filter((c) => !soPendentes || estadoPreco(c) !== "ok")
+      .sort((a, b) => (a.categoria || "").localeCompare(b.categoria || "", "pt") || (a.nome || "").localeCompare(b.nome || "", "pt"));
+  }, [catalogo, q, cat, soPendentes]);
+
+  const contagem = useMemo(() => ({
+    ok: catalogo.filter((c) => estadoPreco(c) === "ok").length,
+    antigo: catalogo.filter((c) => estadoPreco(c) === "antigo").length,
+    porConfirmar: catalogo.filter((c) => estadoPreco(c) === "porConfirmar").length,
+  }), [catalogo]);
+
+  const etiqueta = (c) => {
+    const e = estadoPreco(c);
+    if (e === "ok") return <Tag color={T.green}>{diasDesde(c.precoData) === 0 ? "hoje" : `há ${diasDesde(c.precoData)} d`}</Tag>;
+    if (e === "antigo") return <Tag color={T.amber}>há {diasDesde(c.precoData)} d · confirmar</Tag>;
+    return <Tag color={T.rust}>por confirmar</Tag>;
+  };
+
+  return (
+    <div>
+      <div className="stagger" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 14, marginBottom: 20 }}>
+        <KpiCard icon={Package} label="Artigos" value={catalogo.length} sub={`${contagem.ok} com preço atual`} />
+        <KpiCard icon={AlertTriangle} label="Por confirmar" value={contagem.porConfirmar} sub="sem data de preço" accent={contagem.porConfirmar ? T.rust : undefined} />
+        <KpiCard icon={Clock} label="Preço antigo" value={contagem.antigo} sub={`há mais de ${DIAS_PRECO_ANTIGO} dias`} accent={contagem.antigo ? T.amber : undefined} />
+      </div>
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ position: "relative", flex: "1 1 240px", maxWidth: 360 }}>
+          <Search size={15} style={{ position: "absolute", left: 11, top: 10, opacity: 0.45 }} />
+          <input style={{ ...inputStyle, width: "100%", paddingLeft: 33 }} placeholder="Pesquisar artigo ou fornecedor…" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <Chip ativo={cat === "todas"} onClick={() => setCat("todas")}>Todas</Chip>
+          {CATEGORIAS_CATALOGO.map((c) => <Chip key={c} ativo={cat === c} onClick={() => setCat(c)}>{c}</Chip>)}
+          <Chip ativo={soPendentes} onClick={() => setSoPendentes((v) => !v)}>Só a confirmar</Chip>
+        </div>
+        <div style={{ flex: 1 }} />
+        <Btn icon={Plus} onClick={() => onAdd({ nome: "Novo artigo", categoria: cat === "todas" ? "Painel" : cat })}>Novo artigo</Btn>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
+        {itens.map((c) => (
+          <div key={c.id} className="ui-card" style={{ background: T.paper2, border: `1px solid ${T.line}`, borderRadius: 14, padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+              <input style={{ ...inputStyle, flex: 1, fontWeight: 700 }} value={c.nome} onChange={(e) => onUpdate(c.id, { nome: e.target.value })} />
+              <button className="icon-btn" title="Eliminar" onClick={() => { if (window.confirm(`Eliminar "${c.nome}" do catálogo?`)) onDelete(c.id); }}><Trash2 size={15} /></button>
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <input style={{ ...inputStyle, width: 96 }} inputMode="decimal" defaultValue={c.preco} key={c.id + ":" + c.precoData}
+                onBlur={(e) => { const v = parseFloat(e.target.value.replace(",", ".")); if (Number.isFinite(v) && v !== c.preco) onSetPreco(c.id, v); }} />
+              <span style={{ opacity: 0.6, fontSize: 13 }}>€ /</span>
+              <select style={{ ...selectStyle, width: 70 }} value={c.unidade} onChange={(e) => onUpdate(c.id, { unidade: e.target.value })}>
+                {UNIDADES_ORC.map((u) => <option key={u}>{u}</option>)}
+              </select>
+              <select style={{ ...selectStyle, flex: 1, minWidth: 110 }} value={c.categoria} onChange={(e) => onUpdate(c.id, { categoria: e.target.value })}>
+                {CATEGORIAS_CATALOGO.map((u) => <option key={u}>{u}</option>)}
+              </select>
+            </div>
+            <input style={{ ...inputStyle, fontSize: 12.5 }} placeholder="Fornecedor" value={c.fornecedor || ""} onChange={(e) => onUpdate(c.id, { fornecedor: e.target.value })} />
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              {etiqueta(c)}
+              {estadoPreco(c) !== "ok" && c.precoData && <Btn small variant="ghost" icon={Check} onClick={() => onConfirmar(c.id)}>Preço continua igual</Btn>}
+              {c.nota && <span style={{ fontSize: 12, color: T.rust }}>{c.nota}</span>}
+            </div>
+          </div>
+        ))}
+        {itens.length === 0 && <div style={{ opacity: 0.55, padding: 20 }}>Nenhum artigo com estes filtros.</div>}
+      </div>
+    </div>
+  );
+}
+
 const TABS = [
   { key: "painel", label: "Painel", icon: LayoutGrid, grupo: "Comercial" },
   { key: "pipeline", label: "Pipeline", icon: ArrowRight, grupo: "Comercial" },
   { key: "obras", label: "Obras", icon: TableIcon, grupo: "Comercial" },
   { key: "clientes", label: "Clientes", icon: Users, grupo: "Comercial" },
+  { key: "catalogo", label: "Catálogo", icon: Package, grupo: "Oficina" },
   { key: "producao", label: "Produção", icon: Calendar, grupo: "Oficina" },
   { key: "financeiro", label: "Financeiro", icon: Wallet, grupo: "Finanças" },
   { key: "relatorios", label: "Relatórios", icon: TrendingUp, grupo: "Finanças" },
@@ -5093,6 +5262,7 @@ function Carpinova({ onSignOut, userEmail }) {
   const { despesas, addDespesa, updateDespesa, deleteDespesa } = useDespesasStore();
   const { clientes, addCliente, updateCliente, deleteCliente, syncCliente } = useClientesStore();
   const { equipa, addMembro, updateMembro, deleteMembro } = useEquipaStore();
+  const { catalogo, addArtigo, updateArtigo, setPreco, confirmarPreco, deleteArtigo } = useCatalogoStore();
   const { emails, updateEmail } = useEmailsStore(); // emails já importados continuam ligados às obras; a sincronização foi desligada
   useAvisoSeparador(0);
   const nSeguimentos = useMemo(() => seguimentosPendentes(obras, emails).length, [obras, emails]);
@@ -5220,6 +5390,7 @@ function Carpinova({ onSignOut, userEmail }) {
           {tab === "relatorios" && <Relatorios obras={obras} despesas={despesas} onOpenObra={setSelectedId} />}
           {tab === "faturas" && <Faturas obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onOpenObra={setSelectedId} fornecedorNomes={fornecedores.map((f) => f.nome)} />}
           {tab === "clientes" && <Clientes obras={obras} clientes={clientes} onAddCliente={addCliente} onUpdateCliente={updateCliente} onDeleteCliente={deleteCliente} onOpenObra={setSelectedId} />}
+          {tab === "catalogo" && <Catalogo catalogo={catalogo} onAdd={addArtigo} onUpdate={updateArtigo} onSetPreco={setPreco} onConfirmar={confirmarPreco} onDelete={deleteArtigo} />}
           {tab === "fornecedores" && <Fornecedores fornecedores={fornecedores} onAdd={addFornecedor} onUpdate={updateFornecedor} onDelete={deleteFornecedor} despesas={despesas} obras={obras} onOpenObra={setSelectedId} />}
         </main>
       </div>
