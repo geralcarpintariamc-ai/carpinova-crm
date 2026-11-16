@@ -1618,6 +1618,65 @@ export function OrcamentoObra({ obra, commit, catalogo = [], modelos = [], onAdd
   );
 }
 
+/* ---------- Aba Orçamentos: lista de trabalho ---------- */
+const ABRIR_NO_ORCAMENTO = { v: false };
+const ESTADOS_ORCAMENTACAO = ["orcamentar", "retificacao", "entregue", "em_estudo"];
+
+function OrcamentosTab({ obras, onOpen, onNew }) {
+  const [q, setQ] = useState("");
+  const [todas, setTodas] = useState(false);
+  const norm = (x) => String(x || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const linhas = useMemo(() => {
+    const term = norm(q.trim());
+    return obras
+      .filter((o) => todas || ESTADOS_ORCAMENTACAO.includes(o.estado))
+      .filter((o) => !term || norm(`${o.ref} ${o.cliente} ${o.projeto}`).includes(term))
+      .map((o) => {
+        const orc = normalizaOrcamento(o.orcamento);
+        const t = totaisOrcamento(orc.artigos, { margem: orc.margem, iva: 0.23, autoliquidacao: false, isento: false });
+        const entregue = ["entregue", "em_estudo", "retificacao"].includes(o.estado) && o.dataEntrega;
+        const dias = entregue ? diasDesde(o.dataEntrega) : null;
+        return { o, n: orc.artigos.length, pvp: t.pvpExIva, expirada: dias != null && dias > VALIDADE_DIAS, dias };
+      })
+      .sort((a, b) => String(b.o.dataEntrada || "").localeCompare(String(a.o.dataEntrada || "")));
+  }, [obras, q, todas]);
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <input style={{ ...inputStyle, maxWidth: 320 }} placeholder="Pesquisar por ref., cliente ou obra…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <label style={{ fontSize: 13, display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}><input type="checkbox" checked={todas} onChange={(e) => setTodas(e.target.checked)} /> Mostrar todas as obras</label>
+        <div style={{ flex: 1 }} />
+        <Btn icon={Plus} onClick={onNew}>Nova obra</Btn>
+      </div>
+      <div style={{ fontSize: 12.5, opacity: 0.65, marginBottom: 10 }}>Obras a orçamentar, em retificação, entregues e em estudo. Clica numa para abrir direto no orçamento (importar mapa, custos, PDFs).</div>
+      <div style={{ display: "grid", gap: 8 }}>
+        {linhas.map(({ o, n, pvp, expirada, dias }) => {
+          const st = stageOf(o.estado);
+          return (
+            <div key={o.id} className="ui-card hoverable" onClick={() => onOpen(o.id)} style={{ cursor: "pointer", padding: "12px 14px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ minWidth: 150 }}>
+                <div style={{ fontWeight: 750, fontSize: 13 }}>{o.ref || "SEM REF."}</div>
+                <Tag color={st.color}>{st.label}</Tag>
+              </div>
+              <div style={{ flex: "1 1 220px", minWidth: 0 }}>
+                <div style={{ fontWeight: 650 }}>{o.cliente || "—"}</div>
+                <div style={{ fontSize: 12.5, opacity: 0.7, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.projeto || ""}</div>
+              </div>
+              <div style={{ textAlign: "right", minWidth: 120 }}>
+                {n > 0 ? <><div style={{ fontWeight: 800 }}>{fmtEUR(pvp)}</div><div style={{ fontSize: 11.5, opacity: 0.65 }}>{n} artigo(s) · ex-IVA</div></> : <div style={{ fontSize: 12.5, opacity: 0.6 }}>sem orçamento</div>}
+              </div>
+              {expirada && <Tag color={T.rust}>validade passou ({dias} d) · reavaliar</Tag>}
+              <Btn small icon={ChevronRight}>Abrir orçamento</Btn>
+            </div>
+          );
+        })}
+        {!linhas.length && <div style={{ padding: 20, opacity: 0.6 }}>Nenhuma obra encontrada.</div>}
+      </div>
+    </div>
+  );
+}
+
 /* ---------- Importação de mapas de quantidades ---------- */
 function ImportarMapaModal({ onClose, onImport, numInicial }) {
   const [folhas, setFolhas] = useState(null);
@@ -2107,6 +2166,12 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
   };
 
   const stage = stageOf(local.estado);
+  useEffect(() => {
+    if (!ABRIR_NO_ORCAMENTO.v) return;
+    ABRIR_NO_ORCAMENTO.v = false;
+    const t = setTimeout(() => document.getElementById("orc-sec")?.scrollIntoView({ block: "start" }), 120);
+    return () => clearTimeout(t);
+  }, []);
 
   return (
     <div className="ui-overlay" style={{
@@ -5490,6 +5555,7 @@ const TABS = [
   { key: "painel", label: "Painel", icon: LayoutGrid, grupo: "Comercial" },
   { key: "pipeline", label: "Pipeline", icon: ArrowRight, grupo: "Comercial" },
   { key: "obras", label: "Obras", icon: TableIcon, grupo: "Comercial" },
+  { key: "orcamentos", label: "Orçamentos", icon: FileText, grupo: "Comercial" },
   { key: "clientes", label: "Clientes", icon: Users, grupo: "Comercial" },
   { key: "catalogo", label: "Catálogo", icon: Package, grupo: "Oficina" },
   { key: "producao", label: "Produção", icon: Calendar, grupo: "Oficina" },
@@ -5747,6 +5813,7 @@ function Carpinova({ onSignOut, userEmail }) {
         <main className={"content page-enter" + (tab === "pipeline" ? " wide" : "")} key={tab}>
           {tab === "painel" && <Painel obras={obras} onOpen={setSelectedId} emails={emails} onAddHistorico={addHistorico} onChangeEstado={changeEstado} />}
           {tab === "pipeline" && <Pipeline obras={obras} onOpen={setSelectedId} onChangeEstado={changeEstado} />}
+          {tab === "orcamentos" && <OrcamentosTab obras={obras} onOpen={(id) => { ABRIR_NO_ORCAMENTO.v = true; setSelectedId(id); }} onNew={() => setNovaObraOpen(true)} />}
           {tab === "obras" && <ObrasTab obras={obras} onOpen={setSelectedId} onNew={() => setNovaObraOpen(true)} />}
           {tab === "producao" && <Producao obras={obras} onOpenObra={setSelectedId} />}
           {tab === "financeiro" && <Financeiro obras={obras} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} equipa={equipa} onAddMembro={addMembro} onUpdateMembro={updateMembro} onDeleteMembro={deleteMembro} />}
