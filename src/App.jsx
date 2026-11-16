@@ -1414,7 +1414,8 @@ export function OrcamentoObra({ obra, commit, catalogo = [] }) {
     try {
       const [{ gerarPropostaPDF, gerarFichaCustoPDF }, logo] = await Promise.all([import("./orcamentacao/pdf"), logoDataUrl()]);
       const args = { obra, orcamento: obra.orcamento, logo, catalogo };
-      if (tipo === "proposta") gerarPropostaPDF(args); else gerarFichaCustoPDF(args);
+      if (tipo === "xlsx") { const { descarregarFichaCustoXLSX } = await import("./orcamentacao/excel"); await descarregarFichaCustoXLSX(args); }
+      else if (tipo === "proposta") gerarPropostaPDF(args); else gerarFichaCustoPDF(args);
     } catch (e) { console.error("Erro a gerar PDF:", e); window.alert("Não foi possível gerar o PDF."); }
     setAGerar("");
   };
@@ -1551,6 +1552,7 @@ export function OrcamentoObra({ obra, commit, catalogo = [] }) {
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <Btn icon={Download} disabled={!!aGerar} onClick={() => gerar("proposta")}>{aGerar === "proposta" ? "A gerar…" : "Proposta comercial (PDF)"}</Btn>
           <Btn icon={Download} variant="ghost" disabled={!!aGerar} onClick={() => gerar("ficha")}>{aGerar === "ficha" ? "A gerar…" : "Ficha de custo interna (PDF)"}</Btn>
+          <Btn icon={Download} variant="ghost" disabled={!!aGerar} onClick={() => gerar("xlsx")}>{aGerar === "xlsx" ? "A gerar…" : "Ficha de custo (Excel)"}</Btn>
           <Btn icon={Check} variant="ghost" disabled={obra.valorOrcamento === t.pvpExIva} onClick={() => commit({ valorOrcamento: t.pvpExIva })}>Usar {fmtEUR(t.pvpExIva)} como valor orçamentado</Btn>
           {obra.valorOrcamento != null && obra.valorOrcamento !== t.pvpExIva && <span style={{ fontSize: 12, opacity: 0.6 }}>Valor atual na ficha: {fmtEUR(obra.valorOrcamento)}</span>}
         </div>
