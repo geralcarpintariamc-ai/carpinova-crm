@@ -2131,6 +2131,7 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
                 {local.ref || "SEM REFERÊNCIA"}
               </span>
               <Tag color={stage.color}>{stage.label}</Tag>
+              <Btn small icon={FileText} onClick={() => document.getElementById("orc-sec")?.scrollIntoView({ behavior: "smooth", block: "start" })}>Orçamento</Btn>
             </div>
             <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 20, fontWeight: 700, color: T.ink }}>
               {local.projeto}
@@ -2220,8 +2221,10 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
             </Field>
           )}
 
+          <div id="orc-sec">
           <CutDivider label="Orçamento (custos e margem)" />
           <OrcamentoObra obra={local} commit={commit} catalogo={catalogo} modelos={modelos} onAddModelo={onAddModelo} />
+          </div>
 
           <CutDivider label="Valores" />
           <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
