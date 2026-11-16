@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { supabase } from "./supabaseClient";
 import { CATALOGO_SEED } from "./orcamentacao/catalogoSeed";
-import { CATEGORIAS_CATALOGO, UNIDADES as UNIDADES_ORC, estadoPreco, diasDesde, DIAS_PRECO_ANTIGO } from "./orcamentacao/calc";
+import { CATEGORIAS_CATALOGO, UNIDADES as UNIDADES_ORC, estadoPreco, diasDesde, DIAS_PRECO_ANTIGO, MARGEM_PADRAO, custoLinha, totaisOrcamento, linhasComPrecoDuvidoso } from "./orcamentacao/calc";
 import {
   Plus, Search, X, Mail, Phone, Calendar, AlertTriangle, TrendingUp,
   Package, CheckCircle2, XCircle, Clock, Download, Building2, ChevronDown,
@@ -1307,7 +1307,7 @@ function FicheirosObra({ obra, commit }) {
 function margemOrcamento(o) {
   const custo = Number(o.custoEstimado) || 0;
   const valor = valorTotalObra(o);
-  const meta = tipoClienteOf(o.tipoCliente)?.margem ?? 25;
+  const meta = o.orcamento && o.orcamento.margem != null ? Math.round(o.orcamento.margem * 100) : (tipoClienteOf(o.tipoCliente)?.margem ?? Math.round(MARGEM_PADRAO * 100));
   if (!custo || !valor) return { custo, valor, meta, pct: null, nivel: null, precoMeta: custo ? custo / (1 - meta / 100) : null };
   const pct = ((valor - custo) / valor) * 100;
   const nivel = pct < meta * 0.6 ? "baixa" : pct < meta ? "atencao" : "ok";
@@ -1350,6 +1350,100 @@ function MargemOrcamento({ obra, commit }) {
       {m.nivel === "baixa" && <div style={{ fontSize: 12.5, color: T.rust, fontWeight: 650 }}>Margem muito abaixo da meta — risco de perder dinheiro nesta obra. Revê o preço antes de enviar.</div>}
       {m.nivel === "atencao" && <div style={{ fontSize: 12.5, color: T.amber, fontWeight: 650 }}>Margem abaixo da meta.</div>}
       {!m.custo && <div style={{ fontSize: 11.5, opacity: 0.55 }}>Preenche o custo estimado para ver a margem prevista e o preço mínimo. A meta vem do tipo de cliente.</div>}
+    </div>
+  );
+}
+
+/* ---------- Orçamento por linhas (custo → preço com margem) ---------- */
+function OrcamentoObra({ obra, commit, catalogo = [] }) {
+  const orc = obra.orcamento || { linhas: [], margem: MARGEM_PADRAO };
+  const linhas = orc.linhas || [];
+  const margem = orc.margem != null ? orc.margem : MARGEM_PADRAO;
+  const iva = ivaTipoOf(obra);
+  const [escolha, setEscolha] = useState("");
+  const save = (patch) => {
+    const novo = { ...orc, margem, linhas, ...patch };
+    const t = totaisOrcamento(novo.linhas, { margem: novo.margem, iva: 0.23, autoliquidacao: iva.key === "autoliquidacao", isento: iva.key === "isento" });
+    commit({ orcamento: novo, custoEstimado: t.custo });
+  };
+  const setLinha = (id, patch) => save({ linhas: linhas.map((l) => (l.id === id ? { ...l, ...patch } : l)) });
+  const removeLinha = (id) => save({ linhas: linhas.filter((l) => l.id !== id) });
+  const addLivre = () => save({ linhas: [...linhas, { id: uid(), descricao: "", unidade: "un", qtd: 1, custoUnit: 0, desperdicio: 0 }] });
+  const addCatalogo = (id) => {
+    const c = catalogo.find((x) => x.id === id);
+    if (!c) return;
+    save({ linhas: [...linhas, { id: uid(), catalogoId: c.id, descricao: c.nome, unidade: c.unidade, qtd: 1, custoUnit: c.preco, desperdicio: c.categoria === "Painel" ? 0.1 : 0 }] });
+    setEscolha("");
+  };
+  // Se o preço do catálogo mudou desde que a linha foi criada, o utilizador escolhe quando atualizar.
+  const catPorId = new Map(catalogo.map((c) => [c.id, c]));
+  const t = totaisOrcamento(linhas, { margem, iva: 0.23, autoliquidacao: iva.key === "autoliquidacao", isento: iva.key === "isento" });
+  const duvidosas = linhasComPrecoDuvidoso(linhas, catalogo);
+  const num = (v) => { const n = parseFloat(String(v).replace(",", ".")); return Number.isFinite(n) ? n : 0; };
+
+  return (
+    <div style={{ border: `1px solid ${T.line}`, background: T.paper2, borderRadius: 14, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+      {linhas.length === 0 && <div style={{ fontSize: 12.5, opacity: 0.6 }}>Sem linhas. Junta artigos do catálogo ou cria uma linha livre; o preço de venda calcula-se sozinho a partir do custo e da margem.</div>}
+      {linhas.map((l) => {
+        const cat = l.catalogoId ? catPorId.get(l.catalogoId) : null;
+        const mudou = cat && cat.preco !== l.custoUnit;
+        const duvidosa = duvidosas.some((d) => d.id === l.id);
+        return (
+          <div key={l.id} style={{ border: `1px solid ${duvidosa ? mix(T.amber, 50) : T.line}`, borderRadius: 12, padding: 10, display: "flex", flexDirection: "column", gap: 8, background: T.paper }}>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input style={{ ...inputStyle, flex: 1 }} placeholder="Descrição" value={l.descricao} onChange={(e) => setLinha(l.id, { descricao: e.target.value })} />
+              <button className="icon-btn" title="Remover linha" onClick={() => removeLinha(l.id)}><Trash2 size={15} /></button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(92px, 1fr))", gap: 8, alignItems: "end" }}>
+              <Field label="Qtd."><input style={inputStyle} inputMode="decimal" defaultValue={l.qtd} key={l.id + "q"} onBlur={(e) => setLinha(l.id, { qtd: num(e.target.value) })} /></Field>
+              <Field label="Unid."><select style={selectStyle} value={l.unidade} onChange={(e) => setLinha(l.id, { unidade: e.target.value })}>{UNIDADES_ORC.map((u) => <option key={u}>{u}</option>)}</select></Field>
+              <Field label="Custo unit. €"><input style={inputStyle} inputMode="decimal" defaultValue={l.custoUnit} key={l.id + "c" + l.custoUnit} onBlur={(e) => setLinha(l.id, { custoUnit: num(e.target.value) })} /></Field>
+              <Field label="Desperdício %"><input style={inputStyle} inputMode="decimal" defaultValue={Math.round((l.desperdicio || 0) * 100)} key={l.id + "d"} onBlur={(e) => setLinha(l.id, { desperdicio: num(e.target.value) / 100 })} /></Field>
+              <div style={{ textAlign: "right", fontWeight: 750, paddingBottom: 9 }}>{fmtEUR(custoLinha(l))}</div>
+            </div>
+            {(mudou || (cat && estadoPreco(cat) !== "ok") || (!cat && l.custoUnit <= 0)) && (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
+                {!cat && l.custoUnit <= 0 && <span style={{ color: T.rust, fontWeight: 650 }}>Sem custo definido</span>}
+                {cat && estadoPreco(cat) === "porConfirmar" && <span style={{ color: T.rust, fontWeight: 650 }}>Preço do catálogo por confirmar</span>}
+                {cat && estadoPreco(cat) === "antigo" && <span style={{ color: T.amber, fontWeight: 650 }}>Preço do catálogo com {diasDesde(cat.precoData)} dias</span>}
+                {mudou && <Btn small variant="ghost" icon={RotateCcw} onClick={() => setLinha(l.id, { custoUnit: cat.preco })}>Catálogo está a {fmtEUR(cat.preco)} — atualizar</Btn>}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <select style={{ ...selectStyle, flex: "1 1 220px" }} value={escolha} onChange={(e) => addCatalogo(e.target.value)}>
+          <option value="">+ Juntar do catálogo…</option>
+          {CATEGORIAS_CATALOGO.map((cg) => (
+            <optgroup key={cg} label={cg}>
+              {catalogo.filter((c) => c.categoria === cg).map((c) => <option key={c.id} value={c.id}>{c.nome} · {fmtEUR(c.preco)}/{c.unidade}</option>)}
+            </optgroup>
+          ))}
+        </select>
+        <Btn icon={Plus} variant="ghost" onClick={addLivre}>Linha livre</Btn>
+      </div>
+
+      <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 12, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 12, alignItems: "end" }}>
+        <Field label="Margem sobre o preço %"><input style={inputStyle} inputMode="decimal" defaultValue={Math.round(margem * 1000) / 10} key={"m" + margem} onBlur={(e) => save({ margem: Math.min(Math.max(num(e.target.value), 0), 90) / 100 })} /></Field>
+        <div><div style={{ fontSize: 11.5, opacity: 0.6, fontWeight: 600 }}>Custo total</div><div style={{ fontWeight: 800, fontSize: 18 }}>{fmtEUR(t.custo)}</div></div>
+        <div><div style={{ fontSize: 11.5, opacity: 0.6, fontWeight: 600 }}>Preço de venda (ex-IVA)</div><div style={{ fontWeight: 800, fontSize: 18, color: T.walnutDark }}>{fmtEUR(t.pvpExIva)}</div></div>
+        <div><div style={{ fontSize: 11.5, opacity: 0.6, fontWeight: 600 }}>Lucro</div><div style={{ fontWeight: 800, fontSize: 18, color: T.green }}>{fmtEUR(t.lucro)}</div></div>
+        <div><div style={{ fontSize: 11.5, opacity: 0.6, fontWeight: 600 }}>Total com IVA ({iva.label})</div><div style={{ fontWeight: 800, fontSize: 18 }}>{fmtEUR(t.totalComIva)}</div></div>
+      </div>
+
+      {duvidosas.length > 0 && (
+        <div style={{ fontSize: 12.5, color: T.amber, fontWeight: 650, display: "flex", gap: 6, alignItems: "center" }}>
+          <AlertTriangle size={15} /> {duvidosas.length} linha(s) com preço por confirmar ou sem custo — confirma antes de enviar.
+        </div>
+      )}
+      {linhas.length > 0 && (
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <Btn icon={Check} disabled={obra.valorOrcamento === t.pvpExIva} onClick={() => commit({ valorOrcamento: t.pvpExIva })}>Usar {fmtEUR(t.pvpExIva)} como valor orçamentado</Btn>
+          {obra.valorOrcamento != null && obra.valorOrcamento !== t.pvpExIva && <span style={{ fontSize: 12, opacity: 0.6 }}>Valor atual na ficha: {fmtEUR(obra.valorOrcamento)}</span>}
+        </div>
+      )}
     </div>
   );
 }
@@ -1565,7 +1659,7 @@ function SeguimentoObra({ obra, emails, onPatch, onEstado }) {
   );
 }
 
-function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChangeEstado, onAddHistorico, onDelete, fornecedorNomes, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespesa, onSyncCliente, clientesNomes, equipa }) {
+function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChangeEstado, onAddHistorico, onDelete, fornecedorNomes, despesas, onAddDespesa, onUpdateDespesa, onDeleteDespesa, onSyncCliente, clientesNomes, equipa, catalogo = [] }) {
   const [local, setLocal] = useState(obra);
   const [novaNota, setNovaNota] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -1868,6 +1962,9 @@ function ObraModal({ emails = [], onUpdateEmail, obra, onClose, onUpdate, onChan
               <textarea style={textareaStyle} rows={2} value={local.motivoRejeicao || ""} onChange={(e) => set({ motivoRejeicao: e.target.value })} onBlur={() => commit({ motivoRejeicao: local.motivoRejeicao })} />
             </Field>
           )}
+
+          <CutDivider label="Orçamento (custos e margem)" />
+          <OrcamentoObra obra={local} commit={commit} catalogo={catalogo} />
 
           <CutDivider label="Valores" />
           <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
@@ -5401,7 +5498,7 @@ function Carpinova({ onSignOut, userEmail }) {
       )}
 
       {selected && (
-        <ObraModal key={selected.id} emails={emails} onUpdateEmail={updateEmail} obra={selected} onClose={() => setSelectedId(null)} onUpdate={updateObra} onChangeEstado={changeEstado} onAddHistorico={addHistorico} onDelete={deleteObra} fornecedorNomes={fornecedores.map((f) => f.nome)} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onSyncCliente={syncCliente} clientesNomes={clientesNomesUnicos} equipa={equipa} />
+        <ObraModal key={selected.id} emails={emails} onUpdateEmail={updateEmail} obra={selected} onClose={() => setSelectedId(null)} onUpdate={updateObra} onChangeEstado={changeEstado} onAddHistorico={addHistorico} onDelete={deleteObra} fornecedorNomes={fornecedores.map((f) => f.nome)} despesas={despesas} onAddDespesa={addDespesa} onUpdateDespesa={updateDespesa} onDeleteDespesa={deleteDespesa} onSyncCliente={syncCliente} clientesNomes={clientesNomesUnicos} equipa={equipa} catalogo={catalogo} />
       )}
       {novaObraOpen && (
         <NovaObraModal
