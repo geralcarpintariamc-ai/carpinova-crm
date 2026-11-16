@@ -3,7 +3,7 @@
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { PROPOSTA_DEFAULTS, VALIDADE_DIAS, condicoesPagamento } from "./pdfDefaults";
-import { custoArtigo, precoArtigo, custoLinha, totaisOrcamento, normalizaOrcamento } from "./calc";
+import { custoArtigo, custoUnitArtigo, qtdArtigo, precoArtigo, precoUnitArtigo, custoLinha, totaisOrcamento, normalizaOrcamento } from "./calc";
 
 export const EMPRESA = {
   nome: "Pátio Exímio, Lda",
@@ -80,19 +80,29 @@ export function gerarPropostaPDF({ obra, orcamento, logo }) {
   const sub = [obra.cliente && `Cliente: ${obra.cliente}`, (obra.moradaObra || obra.projeto) && `Local da obra: ${obra.moradaObra || obra.projeto}`, `Data: ${dataPT()}`, `Validade: ${VALIDADE_DIAS} dias`].filter(Boolean).join(" | ");
   doc.text(doc.splitTextToSize(sub, W), MARGIN, 49.5);
 
-  const corpo = o.artigos.map((a) => [String(a.num || ""), a.descricao || "", eur(precoArtigo(a, o.margem))]);
+  const comQtd = o.artigos.some((a) => Number(a.qtd) > 0);
+  const qtdTxt = (a) => (Number(a.qtd) > 0 ? String(Number(a.qtd)).replace(".", ",") : "");
+  const corpo = o.artigos.map((a) => {
+    const pv = precoArtigo(a, o.margem);
+    return comQtd
+      ? [String(a.num || ""), a.descricao || "", qtdTxt(a), Number(a.qtd) > 0 ? a.unidade || "un" : "", Number(a.qtd) > 0 ? eur(precoUnitArtigo(a, o.margem)) : "", eur(pv)]
+      : [String(a.num || ""), a.descricao || "", eur(pv)];
+  });
+  const colsProp = comQtd
+    ? { 0: { cellWidth: 12, halign: "center" }, 1: { cellWidth: "auto" }, 2: { cellWidth: 16, halign: "right" }, 3: { cellWidth: 11, halign: "center" }, 4: { cellWidth: 24, halign: "right" }, 5: { cellWidth: 28, halign: "right" } }
+    : { 0: { cellWidth: 12, halign: "center" }, 1: { cellWidth: "auto" }, 2: { cellWidth: 32, halign: "right" } };
   autoTable(doc, {
     startY: 55,
     margin: { left: MARGIN, right: MARGIN, bottom: 18 },
-    head: [["Art.", "Descrição", "Valor ex-IVA (€)"]],
+    head: [comQtd ? ["Art.", "Descrição", "Qtd.", "Un.", "P. unit. (€)", "Total ex-IVA (€)"] : ["Art.", "Descrição", "Valor ex-IVA (€)"]],
     body: corpo,
     theme: "plain",
     styles: { font: "helvetica", fontSize: 7.6, cellPadding: { top: 2.6, bottom: 2.6, left: 2, right: 2 }, textColor: [30, 30, 30], valign: "middle" },
     headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", halign: "center" },
-    columnStyles: { 0: { cellWidth: 12, halign: "center" }, 1: { cellWidth: "auto" }, 2: { cellWidth: 32, halign: "right" } },
+    columnStyles: colsProp,
     didParseCell: (d) => {
       if (d.section === "body" && d.row.index % 2 === 0) d.cell.styles.fillColor = ZEBRA;
-      if (d.section === "head" && d.column.index === 2) d.cell.styles.halign = "right";
+      if (d.section === "head" && d.column.index >= 2) d.cell.styles.halign = d.column.index === 3 && comQtd ? "center" : "right";
     },
   });
 
@@ -134,7 +144,9 @@ export function gerarFichaCustoPDF({ obra, orcamento, logo, catalogo = [] }) {
   o.artigos.forEach((a) => {
     const custo = custoArtigo(a); const pv = precoArtigo(a, o.margem);
     const body = (a.linhas || []).map((l) => [l.descricao || "", `${String(l.qtd).replace(".", ",")} ${l.unidade || ""}`, eur(Number(l.custoUnit) || 0), l.desperdicio ? `${Math.round(l.desperdicio * 100)}%` : "—", eur(custoLinha(l))]);
-    body.push([{ content: "Custo do artigo", colSpan: 4, styles: { halign: "right", fontStyle: "bold", fillColor: LIGHT } }, { content: eur(custo), styles: { halign: "right", fontStyle: "bold", fillColor: LIGHT } }]);
+    const q = qtdArtigo(a); const temQ = Number(a.qtd) > 0;
+    if (temQ) body.push([{ content: `Custo de 1 ${a.unidade || "un"}`, colSpan: 4, styles: { halign: "right", fontStyle: "bold", fillColor: LIGHT } }, { content: eur(custoUnitArtigo(a)), styles: { halign: "right", fontStyle: "bold", fillColor: LIGHT } }]);
+    body.push([{ content: temQ ? `Custo do artigo (× ${String(q).replace(".", ",")} ${a.unidade || "un"})` : "Custo do artigo", colSpan: 4, styles: { halign: "right", fontStyle: "bold", fillColor: LIGHT } }, { content: eur(custo), styles: { halign: "right", fontStyle: "bold", fillColor: LIGHT } }]);
     body.push([{ content: `Preço de venda (margem ${pv ? Math.round(((pv - custo) / pv) * 1000) / 10 : 0}%)`, colSpan: 4, styles: { halign: "right", fontStyle: "bold", fillColor: LIGHT } }, { content: eur(pv), styles: { halign: "right", fontStyle: "bold", fillColor: LIGHT } }]);
     autoTable(doc, {
       startY: y, margin: { left: MARGIN, right: MARGIN, bottom: 18 }, theme: "plain",

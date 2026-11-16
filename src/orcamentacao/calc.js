@@ -34,19 +34,31 @@ export function custoLinha(l) {
   return r2(num(l.qtd) * num(l.custoUnit) * (1 + num(l.desperdicio)));
 }
 
-export const ARREDONDAR_A = 1; // o preço de cada artigo sobe ao euro inteiro seguinte (sempre a favor da margem)
+export const ARREDONDAR_A = 0; // cêntimos exatos: sem arredondamento do preço do artigo
 
 const arredondaCima = (v, passo = ARREDONDAR_A) => (passo > 0 ? Math.ceil(r2(v) / passo - 1e-9) * passo : r2(v));
 
+// Artigos vindos de um mapa de quantidades têm qtd/unidade: as linhas são o custo de UMA unidade.
+export const qtdArtigo = (a) => (num(a.qtd) > 0 ? num(a.qtd) : 1);
+export const custoUnitArtigo = (a) => r2((a.linhas || []).reduce((s, l) => s + custoLinha(l), 0));
+
 export function custoArtigo(a) {
-  return r2((a.linhas || []).reduce((s, l) => s + custoLinha(l), 0));
+  return r2(custoUnitArtigo(a) * qtdArtigo(a));
 }
 
 // Preço de venda do artigo (ex-IVA): preço fixo, se existir; senão custo/(1-margem) arredondado para cima.
 export function precoArtigo(a, margem = MARGEM_PADRAO) {
   if (a.precoFixo !== null && a.precoFixo !== undefined && a.precoFixo !== "" && num(a.precoFixo) > 0) return r2(num(a.precoFixo));
+  if (num(a.qtd) > 0) { // artigo de mapa: preço unitário em cêntimos exatos × quantidade, para a conta bater certo no PDF
+    const cu = custoUnitArtigo(a);
+    return cu > 0 ? r2(arredondaCima(precoVenda(cu, margem)) * qtdArtigo(a)) : 0;
+  }
   const c = custoArtigo(a);
   return c > 0 ? arredondaCima(precoVenda(c, margem)) : 0;
+}
+
+export function precoUnitArtigo(a, margem = MARGEM_PADRAO) {
+  return r2(precoArtigo(a, margem) / qtdArtigo(a));
 }
 
 // Orçamentos criados só com "linhas" passam a ter um único artigo.

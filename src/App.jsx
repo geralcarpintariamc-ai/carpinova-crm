@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { supabase } from "./supabaseClient";
 import { CATALOGO_SEED } from "./orcamentacao/catalogoSeed";
-import { CATEGORIAS_CATALOGO, UNIDADES as UNIDADES_ORC, estadoPreco, diasDesde, DIAS_PRECO_ANTIGO, MARGEM_PADRAO, custoLinha, custoArtigo, precoArtigo, normalizaOrcamento, totaisOrcamento, linhasComPrecoDuvidoso } from "./orcamentacao/calc";
+import { CATEGORIAS_CATALOGO, UNIDADES as UNIDADES_ORC, estadoPreco, diasDesde, DIAS_PRECO_ANTIGO, MARGEM_PADRAO, custoLinha, custoArtigo, custoUnitArtigo, qtdArtigo, precoArtigo, precoUnitArtigo, normalizaOrcamento, totaisOrcamento, linhasComPrecoDuvidoso } from "./orcamentacao/calc";
+import { lerFicheiro, analisarFolha, linhasParaArtigos } from "./orcamentacao/importMapa";
 import { PROPOSTA_DEFAULTS, PAGAMENTO_PRESETS, VALIDADE_DIAS, presetAutomatico, condicoesPagamento } from "./orcamentacao/pdfDefaults";
 import {
   Plus, Search, X, Mail, Phone, Calendar, AlertTriangle, TrendingUp,
@@ -1361,6 +1362,9 @@ export function OrcamentoObra({ obra, commit, catalogo = [] }) {
   const prop = { ...PROPOSTA_DEFAULTS, ...orc.proposta };
   const iva = ivaTipoOf(obra);
   const [aGerar, setAGerar] = useState("");
+  const [importar, setImportar] = useState(false);
+  const [soSemPreco, setSoSemPreco] = useState(false);
+  const [bulk, setBulk] = useState({ palavra: "", unidade: "", custo: "" });
   const opcoesIva = { iva: 0.23, autoliquidacao: iva.key === "autoliquidacao", isento: iva.key === "isento" };
   const num = (v) => { const n = parseFloat(String(v).replace(",", ".")); return Number.isFinite(n) ? n : 0; };
 
@@ -1383,6 +1387,22 @@ export function OrcamentoObra({ obra, commit, catalogo = [] }) {
     if (c) addLinha(aid, { catalogoId: c.id, descricao: c.nome, unidade: c.unidade, qtd: 1, custoUnit: c.preco, desperdicio: c.categoria === "Painel" ? 0.1 : 0 });
   };
   const setProp = (patch) => save({ proposta: { ...orc.proposta, ...patch } });
+  const temQtd = (a) => num(a.qtd) > 0;
+  const rapidoDe = (a) => temQtd(a) && (a.linhas.length === 0 || (a.linhas.length === 1 && a.linhas[0].rapido));
+  const linhaRapida = (a, custo) => [{ id: a.linhas[0]?.id || uid(), rapido: true, descricao: `Custo por ${a.unidade || "un"}`, unidade: a.unidade || "un", qtd: 1, custoUnit: custo, desperdicio: 0 }];
+  const setCustoRapido = (a, v) => setArtigo(a.id, { linhas: v > 0 ? linhaRapida(a, v) : [] });
+  const norma = (x) => String(x || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const alvoBulk = artigos.filter((a) => rapidoDe(a) && (!bulk.unidade || a.unidade === bulk.unidade) && (!bulk.palavra.trim() || norma(a.descricao).includes(norma(bulk.palavra.trim()))));
+  const aplicarBulk = () => {
+    const v = num(bulk.custo);
+    if (!(v > 0) || !alvoBulk.length) return;
+    const ids = new Set(alvoBulk.map((a) => a.id));
+    save({ artigos: artigos.map((a) => (ids.has(a.id) ? { ...a, linhas: linhaRapida(a, v) } : a)) });
+    setBulk({ ...bulk, custo: "" });
+  };
+  const importarArtigos = (novos) => { save({ artigos: [...artigos, ...novos] }); setImportar(false); };
+  const nComQtd = artigos.filter(temQtd).length;
+  const nSemPreco = artigos.filter((a) => !(custoArtigo(a) > 0) && !(a.precoFixo > 0)).length;
 
   const catPorId = new Map(catalogo.map((c) => [c.id, c]));
   const t = totaisOrcamento(artigos, { margem, ...opcoesIva });
@@ -1401,9 +1421,26 @@ export function OrcamentoObra({ obra, commit, catalogo = [] }) {
 
   return (
     <div style={{ border: `1px solid ${T.line}`, background: T.paper2, borderRadius: 14, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <Btn small icon={Upload} variant="ghost" onClick={() => setImportar(true)}>Importar mapa de quantidades (Excel)</Btn>
+        {artigos.length > 1 && <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}><input type="checkbox" checked={soSemPreco} onChange={(e) => setSoSemPreco(e.target.checked)} /> Só sem preço ({nSemPreco})</label>}
+      </div>
+
+      {nComQtd > 1 && (
+        <div style={{ border: `1px dashed ${T.line}`, borderRadius: 12, padding: 10, display: "grid", gap: 8 }}>
+          {rotulo("Preencher custos em bloco (só artigos ainda sem detalhe de custo)")}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <Field label="Descrição contém"><input style={{ ...inputStyle, width: 170 }} placeholder="ex.: rodapé" value={bulk.palavra} onChange={(e) => setBulk({ ...bulk, palavra: e.target.value })} /></Field>
+            <Field label="Unid."><select style={{ ...selectStyle, width: 90 }} value={bulk.unidade} onChange={(e) => setBulk({ ...bulk, unidade: e.target.value })}><option value="">todas</option>{UNIDADES_ORC.map((u) => <option key={u}>{u}</option>)}</select></Field>
+            <Field label="Custo por unidade €"><input style={{ ...inputStyle, width: 120 }} inputMode="decimal" value={bulk.custo} onChange={(e) => setBulk({ ...bulk, custo: e.target.value })} /></Field>
+            <Btn small disabled={!(num(bulk.custo) > 0) || !alvoBulk.length} onClick={aplicarBulk}>Aplicar a {alvoBulk.length} artigo(s)</Btn>
+          </div>
+        </div>
+      )}
+
       {artigos.length === 0 && <div style={{ fontSize: 12.5, opacity: 0.6 }}>Sem artigos. Cada artigo é uma linha da proposta ao cliente (ex.: "Roupeiro lacado 3,07 × 0,70 × 2,50 m"); dentro dele juntas os materiais, ferragens e horas, e o preço de venda calcula-se sozinho.</div>}
 
-      {artigos.map((a) => {
+      {artigos.filter((a) => !soSemPreco || !(custoArtigo(a) > 0 || a.precoFixo > 0)).map((a) => {
         const custo = custoArtigo(a); const pv = precoArtigo(a, margem);
         return (
           <div key={a.id} style={{ border: `1px solid ${T.line}`, borderRadius: 12, padding: 10, display: "flex", flexDirection: "column", gap: 8, background: T.paper }}>
@@ -1413,7 +1450,18 @@ export function OrcamentoObra({ obra, commit, catalogo = [] }) {
               <button className="icon-btn" title="Remover artigo" onClick={() => removeArtigo(a.id)}><Trash2 size={15} /></button>
             </div>
 
-            {a.linhas.map((l) => {
+            {temQtd(a) && (
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+                <Field label="Qtd."><input style={{ ...inputStyle, width: 90 }} inputMode="decimal" defaultValue={a.qtd} key={a.id + "aq" + a.qtd} onBlur={(e) => setArtigo(a.id, { qtd: num(e.target.value) })} /></Field>
+                <Field label="Unid."><select style={{ ...selectStyle, width: 80 }} value={a.unidade || "un"} onChange={(e) => setArtigo(a.id, { unidade: e.target.value })}>{UNIDADES_ORC.map((u) => <option key={u}>{u}</option>)}</select></Field>
+                {rapidoDe(a) && <Field label={`Custo por ${a.unidade || "un"} (€)`}><input style={{ ...inputStyle, width: 120 }} inputMode="decimal" placeholder="0,00" defaultValue={a.linhas[0]?.custoUnit ?? ""} key={a.id + "cr" + (a.linhas[0]?.custoUnit ?? "")} onBlur={(e) => setCustoRapido(a, num(e.target.value))} /></Field>}
+                {rapidoDe(a)
+                  ? <Btn small variant="ghost" onClick={() => setArtigo(a.id, { linhas: a.linhas.length ? a.linhas.map((l) => ({ ...l, rapido: false })) : [{ id: uid(), descricao: "", unidade: "un", qtd: 1, custoUnit: 0, desperdicio: 0 }] })}>Detalhar em linhas</Btn>
+                  : <span style={{ fontSize: 12, opacity: 0.65, paddingBottom: 9 }}>As linhas abaixo são o custo de 1 {a.unidade || "un"}.</span>}
+              </div>
+            )}
+
+            {!rapidoDe(a) && a.linhas.map((l) => {
               const cat = l.catalogoId ? catPorId.get(l.catalogoId) : null;
               const mudou = cat && cat.preco !== l.custoUnit;
               const semCusto = !cat && !(l.custoUnit > 0);
@@ -1442,7 +1490,7 @@ export function OrcamentoObra({ obra, commit, catalogo = [] }) {
               );
             })}
 
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {!rapidoDe(a) && <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <select style={{ ...selectStyle, flex: "1 1 200px" }} value="" onChange={(e) => e.target.value && addCatalogo(a.id, e.target.value)}>
                 <option value="">+ Juntar do catálogo…</option>
                 {CATEGORIAS_CATALOGO.map((cg) => (
@@ -1452,10 +1500,12 @@ export function OrcamentoObra({ obra, commit, catalogo = [] }) {
                 ))}
               </select>
               <Btn small icon={Plus} variant="ghost" onClick={() => addLinha(a.id, { descricao: "", unidade: "un", qtd: 1, custoUnit: 0, desperdicio: 0 })}>Linha livre</Btn>
-            </div>
+            </div>}
 
             <div style={{ display: "flex", gap: 14, alignItems: "flex-end", flexWrap: "wrap", borderTop: `1px solid ${T.line}`, paddingTop: 8 }}>
-              <div>{rotulo("Custo")}<div style={{ fontWeight: 750 }}>{fmtEUR(custo)}</div></div>
+              {temQtd(a) && <div>{rotulo(`Custo por ${a.unidade || "un"}`)}<div style={{ fontWeight: 750 }}>{fmtEUR(custoUnitArtigo(a))}</div></div>}
+              {temQtd(a) && <div>{rotulo(`Preço por ${a.unidade || "un"}`)}<div style={{ fontWeight: 750 }}>{fmtEUR(precoUnitArtigo(a, margem))}</div></div>}
+              <div>{rotulo(temQtd(a) ? `Custo (× ${qtdArtigo(a)})` : "Custo")}<div style={{ fontWeight: 750 }}>{fmtEUR(custo)}</div></div>
               <div>{rotulo("Preço de venda (ex-IVA)")}<div style={{ fontWeight: 800, color: T.walnutDark }}>{fmtEUR(pv)}</div></div>
               <Field label="Preço fixo € (opcional)"><input style={{ ...inputStyle, width: 110 }} inputMode="decimal" placeholder="auto" defaultValue={a.precoFixo ?? ""} key={a.id + "pf" + a.precoFixo} onBlur={(e) => setArtigo(a.id, { precoFixo: e.target.value === "" ? null : num(e.target.value) })} /></Field>
               {pv > 0 && custo > 0 && <div>{rotulo("Margem")}<div style={{ fontWeight: 750 }}>{(((pv - custo) / pv) * 100).toFixed(1)}%</div></div>}
@@ -1505,6 +1555,100 @@ export function OrcamentoObra({ obra, commit, catalogo = [] }) {
           {obra.valorOrcamento != null && obra.valorOrcamento !== t.pvpExIva && <span style={{ fontSize: 12, opacity: 0.6 }}>Valor atual na ficha: {fmtEUR(obra.valorOrcamento)}</span>}
         </div>
       )}
+      {importar && <ImportarMapaModal onClose={() => setImportar(false)} onImport={importarArtigos} numInicial={artigos.length + 1} />}
+    </div>
+  );
+}
+
+/* ---------- Importação de mapas de quantidades ---------- */
+function ImportarMapaModal({ onClose, onImport, numInicial }) {
+  const [folhas, setFolhas] = useState(null);
+  const [ativa, setAtiva] = useState(0);
+  const [erro, setErro] = useState("");
+  const [aLer, setALer] = useState(false);
+  const [sel, setSel] = useState({}); // { [folha]: Set(linha) }
+  const [filtro, setFiltro] = useState("");
+
+  const abrir = async (file) => {
+    if (!file) return;
+    setErro(""); setALer(true);
+    try {
+      const fs = await lerFicheiro(await file.arrayBuffer());
+      const analisadas = fs.map((f) => ({ nome: f.nome, ...analisarFolha(f.rows) })).filter((f) => f.linhas.some((l) => l.tipo === "item"));
+      if (!analisadas.length) throw new Error("Não encontrei linhas com descrição e quantidade.");
+      const inicial = {};
+      analisadas.forEach((f, i) => { inicial[i] = new Set(f.linhas.filter((l) => l.tipo === "item").map((l) => l.linha)); });
+      setFolhas(analisadas); setSel(inicial); setAtiva(0);
+    } catch (e) { console.error(e); setErro(e.message || "Não consegui ler este ficheiro. Usa .xlsx ou .xlsm."); }
+    setALer(false);
+  };
+
+  const f = folhas?.[ativa];
+  const sAtiva = sel[ativa] || new Set();
+  const itens = f ? f.linhas.filter((l) => l.tipo === "item") : [];
+  const visiveis = f ? f.linhas.filter((l) => l.tipo === "item" || !filtro) : [];
+  const filtrados = filtro ? visiveis.filter((l) => l.tipo === "item" && (l.descricao + " " + l.capitulo).toLowerCase().includes(filtro.toLowerCase())) : visiveis;
+  const setSelAtiva = (set) => setSel({ ...sel, [ativa]: set });
+  const toggle = (linha) => { const n = new Set(sAtiva); n.has(linha) ? n.delete(linha) : n.add(linha); setSelAtiva(n); };
+  const totalSel = Object.values(sel).reduce((s, x) => s + x.size, 0);
+  const marcarFiltrados = (on) => { const n = new Set(sAtiva); filtrados.filter((l) => l.tipo === "item").forEach((l) => (on ? n.add(l.linha) : n.delete(l.linha))); setSelAtiva(n); };
+
+  const confirmar = () => {
+    const escolhidas = [];
+    folhas.forEach((fo, i) => fo.linhas.forEach((l) => { if (l.tipo === "item" && (sel[i] || new Set()).has(l.linha)) escolhidas.push(l); }));
+    onImport(linhasParaArtigos(escolhidas, uid, numInicial));
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }} onClick={onClose}>
+      <div style={{ background: T.paper, borderRadius: 16, width: "min(980px, 100%)", maxHeight: "92vh", display: "flex", flexDirection: "column", overflow: "hidden" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ padding: "14px 16px", borderBottom: `1px solid ${T.line}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontWeight: 800, fontSize: 16 }}>Importar mapa de quantidades</div>
+          <button className="icon-btn" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div style={{ padding: 16, overflow: "auto", display: "grid", gap: 12 }}>
+          {!folhas && (
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{ fontSize: 13, opacity: 0.75 }}>Escolhe o Excel (.xlsx / .xlsm) que o cliente enviou. Vou procurar sozinho as colunas de artigo, descrição, unidade e quantidade, e depois escolhes as linhas a importar.</div>
+              <input type="file" accept=".xlsx,.xlsm" onChange={(e) => abrir(e.target.files?.[0])} />
+              {aLer && <div style={{ fontSize: 13 }}>A ler o ficheiro…</div>}
+              {erro && <div style={{ fontSize: 13, color: T.rust, fontWeight: 650 }}>{erro}</div>}
+            </div>
+          )}
+          {folhas && (
+            <>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {folhas.map((fo, i) => <Btn key={i} small variant={i === ativa ? "primary" : "ghost"} onClick={() => setAtiva(i)}>{fo.nome} ({(sel[i] || new Set()).size}/{fo.linhas.filter((l) => l.tipo === "item").length})</Btn>)}
+              </div>
+              {!f.cols.detetado && <div style={{ fontSize: 12.5, color: T.amber, fontWeight: 650 }}>Não encontrei o cabeçalho desta folha; usei um palpite. Confirma as linhas.</div>}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <input style={{ ...inputStyle, width: 220 }} placeholder="Filtrar por palavra (ex.: porta)" value={filtro} onChange={(e) => setFiltro(e.target.value)} />
+                <Btn small variant="ghost" onClick={() => marcarFiltrados(true)}>{filtro ? "Selecionar visíveis" : "Selecionar todas com quantidade"}</Btn>
+                <Btn small variant="ghost" onClick={() => marcarFiltrados(false)}>{filtro ? "Desmarcar visíveis" : "Limpar"}</Btn>
+              </div>
+              <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, maxHeight: "46vh", overflow: "auto" }}>
+                {filtrados.map((l) => l.tipo === "titulo"
+                  ? <div key={l.linha} style={{ padding: "6px 10px", background: T.paper2, fontWeight: 750, fontSize: 12.5 }}>{l.art ? l.art + " · " : ""}{l.descricao}</div>
+                  : (
+                    <label key={l.linha} style={{ display: "grid", gridTemplateColumns: "22px 56px 1fr 90px", gap: 8, padding: "6px 10px", borderTop: `1px solid ${T.line}`, alignItems: "start", cursor: "pointer", fontSize: 13, background: sAtiva.has(l.linha) ? "transparent" : T.paper2, opacity: sAtiva.has(l.linha) ? 1 : 0.55 }}>
+                      <input type="checkbox" checked={sAtiva.has(l.linha)} onChange={() => toggle(l.linha)} />
+                      <span style={{ fontWeight: 700 }}>{l.art}</span>
+                      <span style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{l.descricao}</span>
+                      <span style={{ textAlign: "right", fontWeight: 700 }}>{l.qtd.toLocaleString("pt-PT")} {l.unidade}</span>
+                    </label>
+                  ))}
+                {!filtrados.length && <div style={{ padding: 12, fontSize: 13, opacity: 0.6 }}>Sem linhas.</div>}
+              </div>
+            </>
+          )}
+        </div>
+        {folhas && (
+          <div style={{ padding: "12px 16px", borderTop: `1px solid ${T.line}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12.5, opacity: 0.7 }}>Cada linha vira um artigo com quantidade; depois preenches o custo por unidade.</span>
+            <Btn disabled={!totalSel} onClick={confirmar}>Importar {totalSel} linha(s)</Btn>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
