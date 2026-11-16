@@ -70,7 +70,7 @@ function contexto(obra, orc) {
 // ---------------------------------------------------------------- Proposta comercial
 export function gerarPropostaPDF({ obra, orcamento, logo }) {
   const { o, t, iva, p } = contexto(obra, orcamento);
-  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
   const W = doc.internal.pageSize.getWidth() - MARGIN * 2;
   cabecalho(doc, logo, W);
 
@@ -130,7 +130,7 @@ export function gerarPropostaPDF({ obra, orcamento, logo }) {
 // ---------------------------------------------------------------- Ficha de custo interna
 export function gerarFichaCustoPDF({ obra, orcamento, logo, catalogo = [] }) {
   const { o, t, iva, p } = contexto(obra, orcamento);
-  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
   const W = doc.internal.pageSize.getWidth() - MARGIN * 2;
   cabecalho(doc, logo, W);
 

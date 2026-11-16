@@ -1394,6 +1394,7 @@ export function OrcamentoObra({ obra, commit, catalogo = [], modelos = [], onAdd
   const prop = { ...PROPOSTA_DEFAULTS, ...orc.proposta };
   const iva = ivaTipoOf(obra);
   const [aGerar, setAGerar] = useState("");
+  const [msgGerar, setMsgGerar] = useState(null);
   const [importar, setImportar] = useState(false);
   const [soSemPreco, setSoSemPreco] = useState(false);
   const [bulk, setBulk] = useState({ palavra: "", unidade: "", custo: "", modelo: "" });
@@ -1458,13 +1459,16 @@ export function OrcamentoObra({ obra, commit, catalogo = [], modelos = [], onAdd
   const rotulo = (txt) => <div style={{ fontSize: 11.5, opacity: 0.6, fontWeight: 600 }}>{txt}</div>;
 
   const gerar = async (tipo) => {
-    setAGerar(tipo);
+    setAGerar(tipo); setMsgGerar(null);
     try {
       const [{ gerarPropostaPDF, gerarFichaCustoPDF }, logo] = await Promise.all([import("./orcamentacao/pdf"), logoDataUrl()]);
       const args = { obra, orcamento: obra.orcamento, logo, catalogo };
       if (tipo === "xlsx") { const { descarregarFichaCustoXLSX } = await import("./orcamentacao/excel"); await descarregarFichaCustoXLSX(args); }
       else if (tipo === "proposta") gerarPropostaPDF(args); else gerarFichaCustoPDF(args);
-    } catch (e) { console.error("Erro a gerar PDF:", e); window.alert("Não foi possível gerar o PDF."); }
+      const ref = String(obra.ref || "orcamento").replace(/[^\w.-]+/g, "-");
+      const nome = tipo === "xlsx" ? `FICHA-CUSTO-${ref}.xlsx` : tipo === "proposta" ? `${ref}.pdf` : `FICHA-CUSTO-${ref}.pdf`;
+      setMsgGerar({ ok: true, texto: `Gerado: ${nome} — procura na pasta Transferências (Downloads) do browser. Se não aparecer, confirma que o browser não bloqueou transferências deste site.` });
+    } catch (e) { console.error("Erro a gerar ficheiro:", e); setMsgGerar({ ok: false, texto: `Não foi possível gerar: ${e?.message || e}` }); }
     setAGerar("");
   };
 
@@ -1610,6 +1614,7 @@ export function OrcamentoObra({ obra, commit, catalogo = [], modelos = [], onAdd
           <Btn icon={Download} variant="ghost" disabled={!!aGerar} onClick={() => gerar("ficha")}>{aGerar === "ficha" ? "A gerar…" : "Ficha de custo interna (PDF)"}</Btn>
           <Btn icon={Download} variant="ghost" disabled={!!aGerar} onClick={() => gerar("xlsx")}>{aGerar === "xlsx" ? "A gerar…" : "Ficha de custo (Excel)"}</Btn>
           <Btn icon={Check} variant="ghost" disabled={obra.valorOrcamento === t.pvpExIva} onClick={() => commit({ valorOrcamento: t.pvpExIva })}>Usar {fmtEUR(t.pvpExIva)} como valor orçamentado</Btn>
+          {msgGerar && <div style={{ flexBasis: "100%", fontSize: 12.5, fontWeight: 650, color: msgGerar.ok ? T.green : T.rust }}>{msgGerar.texto}</div>}
           {obra.valorOrcamento != null && obra.valorOrcamento !== t.pvpExIva && <span style={{ fontSize: 12, opacity: 0.6 }}>Valor atual na ficha: {fmtEUR(obra.valorOrcamento)}</span>}
         </div>
       )}
